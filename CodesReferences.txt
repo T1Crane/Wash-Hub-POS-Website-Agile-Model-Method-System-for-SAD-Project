@@ -1,1 +1,1 @@
-Good Day for those seeing this txt file, Gusto ko lang magsabi na lagyan niyo ng references o comments alongside sa code para malaman ng iba nating mga developers kung para saan yung code na yon at para hindi rin malilito ang magbabasa ng mga codes
+Good Day for those seeing this txt file, Gusto ko lang magsabi na lagyan niyo ng references o comments alongside sa code para malaman ng iba nating mga developers kung para saan yung code na yon at para hindi rin malilito ang magbabasa ng mga codes.
