@@ -1,1 +1,59 @@
+<!doctype html>
+<!--
+  Wash Hub POS & Inventory — page shell
+  - XAMPP:        open http://localhost/<folder>/  (index.php loads this file)
+  - Live Server:  works too, but runs in DEMO mode (browser storage) because
+                  Live Server can't run PHP
+  - Laravel:      see laravel/resources/views/washhub.blade.php (same shell)
+  All screens are drawn by the JavaScript files in /js.
+-->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0b1a3a">
+  <title>Wash Hub POS</title>
+  <link rel="stylesheet" href="index.css">
+  <script>
+    // Where the PHP API lives (relative to this page). Laravel overrides this.
+    window.WASHHUB_API = window.WASHHUB_API || 'api.php';
+  </script>
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar" id="sidebar"></aside>
+    <main class="main">
+      <div id="banner"></div>
+      <header class="topbar">
+        <h1 id="page-title">Wash Hub</h1>
+        <span class="spacer"></span>
+        <div class="scan-box">
+          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2M7 8v8M11 8v8M15 8v8M18 8v8"/></svg>
+          <input type="search" id="scan" placeholder="Scan / type ticket ID, press Enter" aria-label="Find order by ticket ID" autocomplete="off">
+        </div>
+        <span class="clock" id="clock"></span>
+      </header>
+      <div class="view" id="view"><div class="loading">Starting Wash Hub POS…</div></div>
+    </main>
+  </div>
+  <div id="modal-root"></div>
+  <div id="toast-root" aria-live="polite"></div>
+  <div id="print-root"></div>
 
+  <!-- QR codes on claim tickets (optional: if offline, the barcode still works) -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+  <!-- App scripts: helpers first, then data layer, then pages, then the router -->
+  <script src="js/utils.js"></script>
+  <script src="js/store.js"></script>
+  <script src="js/ticket.js"></script>
+  <script src="js/views/order.js"></script>
+  <script src="js/views/dashboard.js"></script>
+  <script src="js/views/pos.js"></script>
+  <script src="js/views/board.js"></script>
+  <script src="js/views/customers.js"></script>
+  <script src="js/views/inventory.js"></script>
+  <script src="js/views/reports.js"></script>
+  <script src="js/views/settings.js"></script>
+  <script src="index.js"></script>
+</body>
+</html>
