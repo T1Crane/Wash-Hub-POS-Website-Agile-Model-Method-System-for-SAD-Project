@@ -158,6 +158,7 @@
           </div>
         </div>`,
       foot: `
+        ${WH.can('order_delete') ? `<button class="btn btn-danger" data-act="delete">${WH.icon('trash')} Delete order</button>` : ''}
         ${prev && order.status !== 'received' ? `<button class="btn btn-ghost" data-act="back">${WH.icon('arrowLeft')} Back to ${h(prev.label)}</button>` : ''}
         <span class="spacer"></span>
         ${order.status === 'ready' && WH.can('order_notify') ? `<button class="btn" data-act="notify">${WH.icon('bell')} Notify</button>` : ''}
@@ -175,6 +176,23 @@
     on('pay', async () => { const u = await WH.collectPayment(order); if (u) { WH.refresh(); reopen(); } });
     on('ticket', () => WH.showTicket(order));
     on('notify', () => WH.notifyCustomer(order, () => { WH.refresh(); reopen(); }));
+    on('delete', async () => {
+      // Asks first: deleting can't be undone, and payments on this order leave the sales reports too
+      const ok = await WH.confirm(
+        `Delete order ${order.code}?`,
+        `This permanently removes <b>${h(order.code)}</b> for <b>${h(order.customer.name)}</b> (${h(WH.itemsSummary(order.items))}, total ${WH.money(order.total)}).
+         ${order.amount_paid > 0 ? `<br><br><b style="color:var(--danger)">${WH.money(order.amount_paid)} already paid on this order will also be removed from the sales reports.</b> Refund the customer if needed.` : ''}
+         <br><br>The customer's profile is kept. To fix a mistake, delete this order and create a new one.`,
+        'Delete permanently'
+      );
+      if (!ok) return;
+      try {
+        await WH.api('order_delete', { id: order.id });
+        m.close();
+        WH.toast(`Order ${order.code} was deleted`, 'success');
+        WH.refresh();
+      } catch (e) { WH.error(e); }
+    });
   };
 
   /** Order card used on the board and in dashboard lists */

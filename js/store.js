@@ -191,6 +191,7 @@
           };
         },
         order_notify: () => { const o = this.find(p.id); o.notified_at = iso(new Date()); return this.order(o.id); },
+        order_delete: () => { const o = this.find(p.id); this.db.orders = this.db.orders.filter((x) => x !== o); return { deleted: o.code }; },
         dashboard: () => this.dashboard(),
         report: () => this.report(p),
         inventory: () => this.inventory(),

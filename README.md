@@ -14,7 +14,7 @@ A touch-friendly front-desk system for a laundry shop: take orders, print claim 
 | Module | What it does |
 |---|---|
 | **New Order (POS counter)** | Tap service tiles (Wash-Dry-Fold per kg, Dry Cleaning per piece, Ironing, Comforter, Express add-on). Enter weight in kg or piece counts with +/− steppers. Price is computed live. Search a customer by name/phone or quick-add one (name, phone, address/notes). Pickup or delivery, discount, notes. Payment: Cash / GCash / Card, amount received, change, and an automatic **Paid / Partial / Unpaid** status. Each order gets an auto-generated ID (`WH-YYMMDD-0001`) and an estimated ready time. |
-| **Orders board** | Kanban columns **Received → Washing → Drying → Folding/Ready → Picked Up/Delivered**. One tap moves an order to the next stage, with Undo. Overdue orders are highlighted. There's also a List view with filters. Before releasing an order with an unpaid balance, the app asks you to collect payment. |
+| **Orders board** | Kanban columns **Received → Washing → Drying → Folding/Ready → Picked Up/Delivered**. One tap moves an order to the next stage, with Undo. Overdue orders are highlighted. There's also a List view with filters. Before releasing an order with an unpaid balance, the app asks you to collect payment. Owner and Admin can **delete** a wrong order from its detail window (with a warning if money was already paid on it). |
 | **Claim ticket** | Printable 80 mm receipt: shop logo/name, order ID, **QR code + Code 39 barcode**, item breakdown, weight, totals, payments, balance, pickup terms, plus a cut-off **bag tag**. Scan or type the ticket ID in the top bar to open an order (works with USB barcode scanners). |
 | **QR order tracking** | The customer scans the ticket's QR code with their phone and sees their order's stage, ready time and balance, with no login. The link uses a secret random code per order (order IDs are easy to guess) and shows only the first name. |
 | **Login & roles** | Every user logs in. **Owner** (superadmin): everything. **Admin**: orders, customers, inventory, reports, prices. **Cashier**: New Order, Orders, Customers, payments. **Staff**: Orders board only. The server checks every request; the menu shows only what the role may use. |
@@ -149,7 +149,7 @@ laravel/               Files that make it run inside Laravel (+ install script)
 - **No login needed:** `ping`, `login`, `logout`, `me`, `track` (QR page, needs the order's secret code)
 - **Everyone logged in:** `bootstrap` (also returns the user's permission list), `account_save`, `orders`, `order`, `order_status`
 - **Owner, Admin, Cashier:** `order_create`, `order_payment`, `order_notify`, `customers`, `customer_save`
-- **Owner, Admin:** `dashboard`, `report`, `inventory`, `inventory_save`, `inventory_adjust`, `inventory_logs`, `service_save`
+- **Owner, Admin:** `order_delete`, `dashboard`, `report`, `inventory`, `inventory_save`, `inventory_adjust`, `inventory_logs`, `service_save`
 - **Owner only:** `settings_save`, `users`, `user_save`, `user_delete`
 
 The full list lives in `WashHubApi::PERMISSIONS`. An action not on the list is refused for everyone ("default deny"). Not logged in → HTTP 401; logged in but not allowed → 403.

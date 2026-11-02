@@ -61,6 +61,7 @@ class WashHubApi
         'order_create'     => ['owner', 'admin', 'cashier'],
         'order_payment'    => ['owner', 'admin', 'cashier'],
         'order_notify'     => ['owner', 'admin', 'cashier'],
+        'order_delete'     => ['owner', 'admin'],  // not cashier: deleting paid orders would hide money from reports
         'customers'        => ['owner', 'admin', 'cashier'],
         'customer_save'    => ['owner', 'admin', 'cashier'],
         // Management
@@ -149,6 +150,7 @@ class WashHubApi
             case 'order_status':     return $this->setStatus($in);
             case 'order_payment':    return $this->addPayment($in);
             case 'order_notify':     return $this->markNotified($in);
+            case 'order_delete':     return $this->deleteOrder((int) ($in['id'] ?? 0));
             // --- dashboard & reports ---
             case 'dashboard':        return $this->dashboard();
             case 'report':           return $this->report($in);
@@ -963,6 +965,18 @@ class WashHubApi
     }
 
     /** Marks that the customer was already texted/called that the laundry is ready. */
+    /**
+     * Owner/Admin: permanently delete a wrong order (e.g. a typo in the weight or the wrong customer).
+     * Its items, payments and status history are deleted with it (ON DELETE CASCADE),
+     * so any payment on it also disappears from the sales reports. The customer profile stays.
+     */
+    private function deleteOrder(int $id): array
+    {
+        $order = $this->order($id); // throws "Order not found." if it doesn't exist
+        $this->db->prepare('DELETE FROM wh_orders WHERE id = ?')->execute([$id]);
+        return ['deleted' => $order['code']];
+    }
+
     private function markNotified(array $in): array
     {
         $id = (int) ($in['id'] ?? 0);
