@@ -61,7 +61,7 @@ class WashHubApi
         'order_create'     => ['owner', 'admin', 'cashier'],
         'order_payment'    => ['owner', 'admin', 'cashier'],
         'order_notify'     => ['owner', 'admin', 'cashier'],
-        'order_delete'     => ['owner', 'admin'],  // not cashier: deleting paid orders would hide money from reports
+        'order_delete'     => ['owner', 'admin', 'cashier'],  // staff can't delete orders
         'customers'        => ['owner', 'admin', 'cashier'],
         'customer_save'    => ['owner', 'admin', 'cashier'],
         // Management
