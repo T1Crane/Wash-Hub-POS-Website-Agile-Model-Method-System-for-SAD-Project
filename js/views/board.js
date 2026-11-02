@@ -29,7 +29,7 @@
         </div>
         <span class="spacer"></span>
         <button class="btn" id="b-refresh" title="Refresh">${WH.icon('refresh')}</button>
-        <a class="btn btn-primary" href="#/pos">${WH.icon('plus')} New order</a>
+        ${WH.can('order_create') ? `<a class="btn btn-primary" href="#/pos">${WH.icon('plus')} New order</a>` : ''}
       </div>
       <div id="b-filters" class="row wrap" style="margin-bottom:14px"></div>
       <div id="b-body"><div class="loading">Loading orders…</div></div>`;

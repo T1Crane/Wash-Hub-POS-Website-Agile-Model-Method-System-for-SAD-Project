@@ -1,0 +1,8 @@
+# Apache settings for XAMPP.
+# Make the browser check for a newer copy of the app files every time,
+# so changes to the JS/CSS show up after a normal refresh (no stale cache).
+<IfModule mod_headers.c>
+    <FilesMatch "\.(js|css|html|php)$">
+        Header set Cache-Control "no-cache"
+    </FilesMatch>
+</IfModule>

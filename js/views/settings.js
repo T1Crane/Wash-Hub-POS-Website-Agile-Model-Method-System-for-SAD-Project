@@ -15,11 +15,13 @@
   WH.views.settings = (view) => {
     const s = WH.state.settings;
     const local = WH.store.mode === 'local';
+    const canEditShop = WH.can('settings_save'); // Owner only; the Admin sees these read-only
 
     view.innerHTML = `
       <div class="page-grid">
         <div class="card">
-          <div class="card-head"><h2>Shop details</h2><span class="small muted">Shown on the claim ticket</span></div>
+          <div class="card-head"><h2>Shop details</h2><span class="small muted">${canEditShop ? 'Shown on the claim ticket' : 'Only the Owner can change these'}</span></div>
+          <fieldset ${canEditShop ? '' : 'disabled'} style="border:0;padding:0;margin:0;min-width:0">
           <div class="grid-2" id="set-shop">
             <label class="field">Shop name<input type="text" name="shop_name" value="${h(s.shop_name)}"></label>
             <label class="field">Tagline<input type="text" name="shop_tagline" value="${h(s.shop_tagline)}"></label>
@@ -28,8 +30,18 @@
             <label class="field span-2">Pickup terms (printed on ticket)<textarea name="pickup_terms" rows="3">${h(s.pickup_terms)}</textarea></label>
             <label class="field span-2">"Ready for pickup" SMS template — use {name} {code} {shop} {balance} {total}
               <textarea name="sms_template" rows="2">${h(s.sms_template)}</textarea></label>
+            <label class="field span-2">QR code link on tickets (the address customers' phones will open)
+              <input type="text" name="public_url" value="${h(s.public_url)}" placeholder="${h(location.origin + location.pathname)}">
+              <span class="small muted" style="font-weight:400">Leave blank to use the address this app is open on now.
+                Phones on the shop Wi-Fi need this PC's network address, e.g. <code>http://192.168.1.189/washhub/</code> (run <code>ipconfig</code> to see it).
+                Customers away from the shop can only open it once the system is hosted online.</span>
+              ${!s.public_url && /^(localhost|127\.|\[::1\])/.test(location.hostname)
+                ? '<span class="small" style="font-weight:600;color:var(--warning)">⚠ The app is open on "localhost", so QR codes will point to localhost and phones can\'t open them. Fill in this PC\'s network address above.</span>'
+                : ''}
+            </label>
           </div>
-          <div class="row" style="margin-top:14px;justify-content:flex-end"><button class="btn btn-primary" id="set-save">${WH.icon('check')} Save shop details</button></div>
+          </fieldset>
+          ${canEditShop ? `<div class="row" style="margin-top:14px;justify-content:flex-end"><button class="btn btn-primary" id="set-save">${WH.icon('check')} Save shop details</button></div>` : ''}
         </div>
 
         <div class="card">
@@ -54,7 +66,7 @@
       </div>`;
 
     // ----- shop details -----
-    view.querySelector('#set-save').onclick = async () => {
+    if (canEditShop) view.querySelector('#set-save').onclick = async () => {
       try {
         WH.state.settings = await WH.api('settings_save', WH.formData(view.querySelector('#set-shop')));
         WH.toast('Shop details saved', 'success');

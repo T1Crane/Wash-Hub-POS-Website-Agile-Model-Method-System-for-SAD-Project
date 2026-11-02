@@ -48,11 +48,26 @@
       el.innerHTML = '';
       if (typeof window.QRCode === 'function') {
         // eslint-disable-next-line no-new
-        new window.QRCode(el, { text: el.dataset.qr, width: 168, height: 168, correctLevel: window.QRCode.CorrectLevel.M });
+        new window.QRCode(el, { text: el.dataset.qr, width: 232, height: 232, correctLevel: window.QRCode.CorrectLevel.M });
       } else {
         el.style.display = 'none'; // offline: barcode still works
       }
     });
+  };
+
+  /**
+   * The link inside the QR code: <app address>?track=<secret code>.
+   * The address comes from Settings ("QR code link"); blank = the address the app is open on now.
+   * Opening it shows the public "track your order" card (see showTracking in index.js).
+   */
+  WH.trackUrl = (o) => {
+    if (!o.track_token) return o.code; // very old demo orders have no tracking code
+    const base = String(WH.state.settings.public_url || '').trim() || (location.origin + location.pathname);
+    const url = new URL(base, location.href);
+    url.search = '';
+    url.hash = '';
+    url.searchParams.set('track', o.track_token);
+    return url.href;
   };
 
   // ---------- Claim ticket layout ----------
@@ -76,8 +91,9 @@
       <div class="t-title">CLAIM TICKET${o.is_express ? ' · EXPRESS' : ''}</div>
       <div class="t-code">${h(o.code)}</div>
       <div class="t-codes">
-        <div class="t-qr" data-qr="${h(o.code)}"></div>
+        <div class="t-qr" data-qr="${h(WH.trackUrl(o))}"></div>
       </div>
+      <div class="t-center" style="font-size:10px">Scan with your phone to check your order status</div>
       <div class="t-barcode" data-barcode="${h(o.code)}"></div>
       <table style="margin-top:6px">
         <tr><td>Customer</td><td class="r"><b>${h(o.customer.name)}</b></td></tr>

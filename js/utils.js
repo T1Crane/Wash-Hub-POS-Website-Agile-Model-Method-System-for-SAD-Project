@@ -66,6 +66,23 @@ window.WH = window.WH || {};
   /** Short summary of order items for cards: "3.5 kg Wash-Dry-Fold · 2 pcs Ironing" */
   WH.itemsSummary = (items) => items.map((i) => (i.unit === 'flat' ? i.name : `${WH.qtyLabel(i.qty, i.unit)} ${i.name}`)).join(' · ');
 
+  // ---------- User roles & permissions ----------
+  WH.ROLES = {
+    owner:   { label: 'Owner',   about: 'Everything, including user accounts and shop settings' },
+    admin:   { label: 'Admin',   about: 'Orders, customers, inventory, reports and the price list' },
+    cashier: { label: 'Cashier', about: 'New orders, payments, the Orders board and customers' },
+    staff:   { label: 'Staff',   about: 'Orders board only: move orders between stages' },
+  };
+  WH.roleLabel = (role) => (WH.ROLES[role] || { label: role }).label;
+  WH.rolePill = (role) => `<span class="pill role-${WH.h(role)}">${WH.h(WH.roleLabel(role))}</span>`;
+
+  /**
+   * Can the logged-in user use this server action? The list comes from the server ("bootstrap"),
+   * so the screen and WashHubApi::PERMISSIONS always agree. Demo mode has no list = everything allowed.
+   * NOTE: this only hides buttons; the server still checks every request.
+   */
+  WH.can = (action) => !WH.state || !Array.isArray(WH.state.permissions) || WH.state.permissions.includes(action);
+
   WH.methodLabel = (m) => ({ cash: 'Cash', gcash: 'GCash / E-wallet', card: 'Card' }[m] || m);
   WH.payLabel = (s) => ({ paid: 'Paid', partial: 'Partial', unpaid: 'Unpaid' }[s] || s);
 
@@ -140,6 +157,10 @@ window.WH = window.WH || {};
     download: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/>',
     list: '<path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/>',
     copy: '<rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>',
+    user: '<circle cx="12" cy="8" r="4"/><path d="M4 21v-1a6 6 0 0 1 6-6h4a6 6 0 0 1 6 6v1"/>',
+    shield: '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="m9 12 2 2 4-4"/>',
+    key: '<circle cx="7.5" cy="15.5" r="4.5"/><path d="m10.7 12.3 9.3-9.3M17 6l3 3M14 9l2 2"/>',
+    logout: '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/>',
   };
   WH.icon = (name, cls = '') => `<svg class="icon ${cls}" viewBox="0 0 24 24" aria-hidden="true">${ICONS[name] || ''}</svg>`;
 

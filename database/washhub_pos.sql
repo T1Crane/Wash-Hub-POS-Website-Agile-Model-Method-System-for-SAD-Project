@@ -42,6 +42,7 @@ CREATE TABLE IF NOT EXISTS wh_customers (
 CREATE TABLE IF NOT EXISTS wh_orders (
     id                INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
     code              VARCHAR(20) NOT NULL UNIQUE,
+    track_token       VARCHAR(32) NULL UNIQUE,
     customer_id       INT UNSIGNED NOT NULL,
     status            ENUM('received','washing','drying','ready','completed') NOT NULL DEFAULT 'received',
     fulfillment       ENUM('pickup','delivery') NOT NULL DEFAULT 'pickup',
@@ -112,6 +113,17 @@ CREATE TABLE IF NOT EXISTS wh_inventory_logs (
     CONSTRAINT fk_invlog_item FOREIGN KEY (item_id) REFERENCES wh_inventory(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+CREATE TABLE IF NOT EXISTS wh_users (
+    id            INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    username      VARCHAR(50)  NOT NULL UNIQUE,
+    full_name     VARCHAR(100) NOT NULL,
+    password_hash VARCHAR(255) NOT NULL,
+    role          ENUM('owner','admin','cashier', 'staff') NOT NULL DEFAULT 'cashier',
+    active        TINYINT(1) NOT NULL DEFAULT 1,
+    created_at    DATETIME NOT NULL,
+    last_login_at DATETIME NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 -- Starter price list
 INSERT INTO wh_services (name, unit, price, turnaround_hours, is_express, color, sort_order) VALUES
 ('Wash-Dry-Fold', 'kg', 35, 24, 0, 'blue', 1),
@@ -129,4 +141,5 @@ INSERT INTO wh_inventory (name, unit, stock, reorder_level, cost, updated_at) VA
 ('Hangers', 'pcs', 25, 30, 12, NOW()),
 ('Dryer Sheets', 'box', 6, 2, 150, NOW());
 
--- Shop settings are filled in automatically by the app (Settings page).
+-- Shop settings and the first Owner account (owner / owner123) are created
+-- automatically the first time the app is opened.

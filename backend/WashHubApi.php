@@ -43,6 +43,49 @@ class WashHubApi
     /** Accepted payment methods. */
     public const PAYMENT_METHODS = ['cash', 'gcash', 'card'];
 
+    /** User roles, highest first. owner = superadmin. */
+    public const ROLES = ['owner', 'admin', 'cashier', 'staff'];
+
+    /** Actions anyone may call without logging in. */
+    public const PUBLIC_ACTIONS = ['ping', 'login', 'logout', 'me', 'track'];
+
+    /** Who may do what: action => roles allowed. Not listed = nobody (default deny). */
+    public const PERMISSIONS = [
+        'bootstrap'        => ['owner', 'admin', 'cashier', 'staff'],
+        'account_save'     => ['owner', 'admin', 'cashier', 'staff'],  // "My Account": edit your own profile
+        // Orders board: everyone, including staff
+        'orders'           => ['owner', 'admin', 'cashier', 'staff'],
+        'order'            => ['owner', 'admin', 'cashier', 'staff'],
+        'order_status'     => ['owner', 'admin', 'cashier', 'staff'],
+        // Front desk
+        'order_create'     => ['owner', 'admin', 'cashier'],
+        'order_payment'    => ['owner', 'admin', 'cashier'],
+        'order_notify'     => ['owner', 'admin', 'cashier'],
+        'customers'        => ['owner', 'admin', 'cashier'],
+        'customer_save'    => ['owner', 'admin', 'cashier'],
+        // Management
+        'dashboard'        => ['owner', 'admin'],
+        'report'           => ['owner', 'admin'],
+        'inventory'        => ['owner', 'admin'],
+        'inventory_logs'   => ['owner', 'admin'],
+        'inventory_save'   => ['owner', 'admin'],
+        'inventory_adjust' => ['owner', 'admin'],
+        'service_save'     => ['owner', 'admin'],
+        // Owner only
+        'settings_save'    => ['owner'],
+        'users'            => ['owner'],
+        'user_save'        => ['owner'],
+    ];
+
+    /** True if this role may run this action. $role = null means nobody is logged in. */
+    public static function allowed(?string $role, string $action): bool
+    {
+        if (in_array($action, self::PUBLIC_ACTIONS, true)) {
+            return true;
+        }
+        return $role !== null && in_array($role, self::PERMISSIONS[$action] ?? [], true);
+    }
+
     /** Shop settings that the Settings page is allowed to change (key => default). */
     public const DEFAULT_SETTINGS = [
         'shop_name'     => 'Wash Hub',
@@ -53,15 +96,25 @@ class WashHubApi
                          . 'Wash Hub is not liable for color bleeding, shrinkage, or items left in pockets. '
                          . 'Please check your items before leaving the counter.',
         'sms_template'  => 'Hi {name}! Your laundry ({code}) at {shop} is ready for pickup. Balance due: {balance}. Thank you!',
+        // Web address the QR code on tickets points to (blank = the address the app is opened with)
+        'public_url'    => '',
     ];
 
     private PDO $db;
     private DateTimeZone $tz;
 
+    /** The logged-in user making this request (null = nobody). Set by api.php / the Laravel controller. */
+    private ?array $user = null;
+
     public function __construct(PDO $db)
     {
         $this->db = $db;
         $this->tz = new DateTimeZone(self::TIMEZONE);
+    }
+
+    public function setUser(?array $user): void
+    {
+        $this->user = $user;
     }
 
     // =====================================================================
@@ -74,7 +127,13 @@ class WashHubApi
         switch ($action) {
             // --- setup / app start ---
             case 'ping':             $this->install(); return ['mode' => 'mysql', 'time' => $this->iso($this->now())];
-            case 'bootstrap':        return ['settings' => $this->settings(), 'services' => $this->services()];
+            case 'login':            return $this->login($in);
+            case 'track':            return $this->track((string) ($in['t'] ?? ''));
+            case 'bootstrap':        return ['settings' => $this->settings(), 'services' => $this->services(), 'permissions' => $this->myPermissions()];
+            // --- user accounts ---
+            case 'users':            return $this->users();
+            case 'user_save':        return $this->saveUser($in);
+            case 'account_save':     return $this->saveAccount($in);
             // --- settings & price list ---
             case 'settings_save':    return $this->saveSettings($in);
             case 'service_save':     return $this->saveService($in);
@@ -143,6 +202,7 @@ class WashHubApi
             "CREATE TABLE IF NOT EXISTS wh_orders (
                 id                INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
                 code              VARCHAR(20) NOT NULL UNIQUE,
+                track_token       VARCHAR(32) NULL UNIQUE,
                 customer_id       INT UNSIGNED NOT NULL,
                 status            ENUM('received','washing','drying','ready','completed') NOT NULL DEFAULT 'received',
                 fulfillment       ENUM('pickup','delivery') NOT NULL DEFAULT 'pickup',
@@ -217,6 +277,18 @@ class WashHubApi
                 created_at DATETIME NOT NULL,
                 CONSTRAINT fk_invlog_item FOREIGN KEY (item_id) REFERENCES wh_inventory(id) ON DELETE CASCADE
             ) $opts",
+                // Staff accounts that can log in. "role" decides what each person may do.
+            "CREATE TABLE IF NOT EXISTS wh_users (
+                id            INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+                username      VARCHAR(50)  NOT NULL UNIQUE,
+                full_name     VARCHAR(100) NOT NULL,
+                password_hash VARCHAR(255) NOT NULL,
+                role          ENUM('owner','admin','cashier', 'staff') NOT NULL DEFAULT 'cashier',
+                active        TINYINT(1) NOT NULL DEFAULT 1,
+                created_at    DATETIME NOT NULL,
+                last_login_at DATETIME NULL
+            ) $opts",
+
         ];
     }
 
@@ -225,6 +297,16 @@ class WashHubApi
     {
         foreach (self::schema() as $sql) {
             $this->db->exec($sql);
+        }
+
+        // Upgrade for databases made before the QR tracking link existed:
+        // add the column, then give every older order its own secret tracking code
+        if (!$this->db->query("SHOW COLUMNS FROM wh_orders LIKE 'track_token'")->fetch()) {
+            $this->db->exec('ALTER TABLE wh_orders ADD COLUMN track_token VARCHAR(32) NULL UNIQUE AFTER code');
+        }
+        $stmt = $this->db->prepare('UPDATE wh_orders SET track_token = ? WHERE id = ?');
+        foreach ($this->db->query('SELECT id FROM wh_orders WHERE track_token IS NULL')->fetchAll(PDO::FETCH_COLUMN) as $id) {
+            $stmt->execute([$this->newToken(), $id]);
         }
 
         // Add any missing setting keys (keeps values the shop already changed)
@@ -260,6 +342,185 @@ class WashHubApi
             ] as $row) {
                 $stmt->execute([...$row, $now]);
             }
+        }
+
+        // First run: create the Owner account so someone can log in.
+        // Default login: owner / owner123  (change it after the first login!)
+        if ((int) $this->db->query('SELECT COUNT(*) FROM wh_users')->fetchColumn() === 0) {
+            $this->db->prepare('INSERT INTO wh_users (username, full_name, password_hash, role, created_at) VALUES (?, ?, ?, ?, ?)')
+                ->execute(['owner', 'Shop Owner', password_hash('owner123', PASSWORD_DEFAULT), 'owner', $this->dt($this->now())]);
+        }
+    }
+
+    // =====================================================================
+    //  USERS & LOGIN
+    // =====================================================================
+
+    /** Checks username + password. Returns the user (never the hash) or throws an error. */
+    public function login(array $in): array
+    {
+        $username = trim((string) ($in['username'] ?? ''));
+        $password = (string) ($in['password'] ?? '');
+
+        $stmt = $this->db->prepare('SELECT * FROM wh_users WHERE username = ?');
+        $stmt->execute([$username]);
+        $user = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        // Same message for "no such user" and "wrong password", so nobody can find out which usernames exist
+        if (!$user || !password_verify($password, $user['password_hash'])) {
+            throw new InvalidArgumentException('Wrong username or password.');
+        }
+        if (!$user['active']) {
+            throw new InvalidArgumentException('This account is disabled. Please ask the owner.');
+        }
+
+        $this->db->prepare('UPDATE wh_users SET last_login_at = ? WHERE id = ?')
+            ->execute([$this->dt($this->now()), $user['id']]);
+
+        return $this->publicUser($user);
+    }
+
+    /**
+     * Reloads a logged-in user from the database (called on every request).
+     * Returns null if the account was deleted or disabled, which logs them out.
+     * This makes a role change by the owner take effect right away.
+     */
+    public function freshUser(int $id): ?array
+    {
+        $stmt = $this->db->prepare('SELECT * FROM wh_users WHERE id = ? AND active = 1');
+        $stmt->execute([$id]);
+        $user = $stmt->fetch(PDO::FETCH_ASSOC);
+        return $user ? $this->publicUser($user) : null;
+    }
+
+    /** The actions the current user may use. The screen uses this list to hide what they can't do. */
+    private function myPermissions(): array
+    {
+        $role = $this->user['role'] ?? null;
+        return array_values(array_filter(array_keys(self::PERMISSIONS), fn ($action) => self::allowed($role, $action)));
+    }
+
+    /** Owner only: list every account (never the password hashes). */
+    private function users(): array
+    {
+        $rows = $this->db->query("SELECT * FROM wh_users ORDER BY FIELD(role, 'owner', 'admin', 'cashier', 'staff'), full_name")
+            ->fetchAll(PDO::FETCH_ASSOC);
+        return array_map(fn ($u) => $this->publicUser($u) + [
+            'active'        => (bool) $u['active'],
+            'created_at'    => $this->iso($u['created_at']),
+            'last_login_at' => $this->iso($u['last_login_at']),
+        ], $rows);
+    }
+
+    /**
+     * Owner only: create (no id) or edit (with id) an account.
+     * Payload {id?, full_name, username, role, active, password}. Password is optional when editing (blank = keep).
+     */
+    private function saveUser(array $in): array
+    {
+        $id       = (int) ($in['id'] ?? 0);
+        $fullName = $this->requireText($in['full_name'] ?? '', 'Full name');
+        $username = $this->cleanUsername($in['username'] ?? '');
+        $role     = (string) ($in['role'] ?? '');
+        $active   = !isset($in['active']) || $in['active'] ? 1 : 0;
+        $password = (string) ($in['password'] ?? '');
+
+        if (!in_array($role, self::ROLES, true)) {
+            throw new InvalidArgumentException('Choose a role.');
+        }
+        // Lock-out protection: the owner can't demote or disable their own account
+        if ($id > 0 && $id === (int) ($this->user['id'] ?? 0) && ($role !== $this->user['role'] || !$active)) {
+            throw new InvalidArgumentException("You can't change your own role or disable your own account.");
+        }
+        if ($id === 0 && $password === '') {
+            throw new InvalidArgumentException('Set a password for the new account.');
+        }
+        if ($password !== '') {
+            $this->checkNewPassword($password);
+        }
+        $this->assertUsernameFree($username, $id);
+
+        if ($id > 0) {
+            $stmt = $this->db->prepare('UPDATE wh_users SET full_name = ?, username = ?, role = ?, active = ? WHERE id = ?');
+            $stmt->execute([$fullName, $username, $role, $active, $id]);
+            if ($password !== '') {
+                $this->db->prepare('UPDATE wh_users SET password_hash = ? WHERE id = ?')
+                    ->execute([password_hash($password, PASSWORD_DEFAULT), $id]);
+            }
+        } else {
+            $this->db->prepare('INSERT INTO wh_users (username, full_name, password_hash, role, active, created_at) VALUES (?, ?, ?, ?, ?, ?)')
+                ->execute([$username, $fullName, password_hash($password, PASSWORD_DEFAULT), $role, $active, $this->dt($this->now())]);
+        }
+        return $this->users();
+    }
+
+    /**
+     * "My Account" — any logged-in user edits their own name, username and password.
+     * Payload {full_name, username, current_password, new_password}.
+     * Changing the username or password needs the current password (in case someone else is using your screen).
+     */
+    private function saveAccount(array $in): array
+    {
+        $stmt = $this->db->prepare('SELECT * FROM wh_users WHERE id = ?');
+        $stmt->execute([(int) ($this->user['id'] ?? 0)]);
+        $me = $stmt->fetch(PDO::FETCH_ASSOC);
+        if (!$me) {
+            throw new InvalidArgumentException('Please log in first.');
+        }
+
+        $fullName    = $this->requireText($in['full_name'] ?? '', 'Full name');
+        $username    = $this->cleanUsername($in['username'] ?? $me['username']);
+        $newPassword = (string) ($in['new_password'] ?? '');
+
+        if ($username !== $me['username'] || $newPassword !== '') {
+            if (!password_verify((string) ($in['current_password'] ?? ''), $me['password_hash'])) {
+                throw new InvalidArgumentException('Your current password is incorrect.');
+            }
+        }
+        if ($newPassword !== '') {
+            $this->checkNewPassword($newPassword);
+        }
+        $this->assertUsernameFree($username, (int) $me['id']);
+
+        $this->db->prepare('UPDATE wh_users SET full_name = ?, username = ? WHERE id = ?')
+            ->execute([$fullName, $username, $me['id']]);
+        if ($newPassword !== '') {
+            $this->db->prepare('UPDATE wh_users SET password_hash = ? WHERE id = ?')
+                ->execute([password_hash($newPassword, PASSWORD_DEFAULT), $me['id']]);
+        }
+        return $this->freshUser((int) $me['id']);
+    }
+
+    /** The safe part of a user row: what the browser may see (no password hash). */
+    private function publicUser(array $u): array
+    {
+        return ['id' => (int) $u['id'], 'username' => $u['username'], 'full_name' => $u['full_name'], 'role' => $u['role']];
+    }
+
+    /** Usernames: 3-50 characters, letters/numbers and . _ - @ (so an email address works too). */
+    private function cleanUsername($value): string
+    {
+        $value = trim((string) $value);
+        if (!preg_match('/^[A-Za-z0-9._@-]{3,50}$/', $value)) {
+            throw new InvalidArgumentException('Username must be 3-50 characters: letters, numbers, dot, dash, underscore or @ (an email works too).');
+        }
+        return $value;
+    }
+
+    private function checkNewPassword(string $password): void
+    {
+        if (mb_strlen($password) < 6) {
+            throw new InvalidArgumentException('Password must be at least 6 characters.');
+        }
+    }
+
+    /** Usernames must be unique. $exceptId = the account being edited (it may keep its own name). */
+    private function assertUsernameFree(string $username, int $exceptId): void
+    {
+        $stmt = $this->db->prepare('SELECT id FROM wh_users WHERE username = ? AND id <> ?');
+        $stmt->execute([$username, $exceptId]);
+        if ($stmt->fetchColumn()) {
+            throw new InvalidArgumentException('That username is already taken.');
         }
     }
 
@@ -559,10 +820,10 @@ class WashHubApi
                 $customerId = $this->resolveCustomer(is_array($in['customer'] ?? null) ? $in['customer'] : []);
                 $code = $this->nextOrderCode($now);
                 $this->db->prepare('INSERT INTO wh_orders
-                        (code, customer_id, status, fulfillment, is_express, total_weight, subtotal, discount, total,
+                        (code, track_token, customer_id, status, fulfillment, is_express, total_weight, subtotal, discount, total,
                          amount_paid, payment_status, notes, created_at, ready_at, status_updated_at)
-                        VALUES (?, ?, \'received\', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
-                    ->execute([$code, $customerId, $fulfil, $express ? 1 : 0, round($weight, 2), $subtotal, $discount, $total,
+                        VALUES (?, ?, ?, \'received\', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+                    ->execute([$code, $this->newToken(), $customerId, $fulfil, $express ? 1 : 0, round($weight, 2), $subtotal, $discount, $total,
                                $paid, $this->paymentStatus($paid, $total), $notes, $this->dt($now), $this->dt($readyAt), $this->dt($now)]);
                 $orderId = (int) $this->db->lastInsertId();
 
@@ -585,6 +846,46 @@ class WashHubApi
                 }
             }
         }
+    }
+
+    /**
+     * Public "Where is my laundry?" page, opened by scanning the QR code on the claim ticket.
+     * Needs the order's secret tracking code (not the order ID, which is easy to guess),
+     * and shows only the customer's first name — no phone number or address.
+     */
+    private function track(string $token): array
+    {
+        $stmt = $this->db->prepare('SELECT id FROM wh_orders WHERE track_token = ?');
+        $stmt->execute([$token]);
+        $id = preg_match('/^[a-f0-9]{32}$/', $token) ? $stmt->fetchColumn() : false;
+        if (!$id) {
+            throw new InvalidArgumentException('This tracking link is not valid. Please check your claim ticket or contact the shop.');
+        }
+        $o = $this->order((int) $id);
+        $s = $this->settings();
+        return [
+            'shop'  => ['name' => $s['shop_name'], 'phone' => $s['shop_phone'], 'address' => $s['shop_address']],
+            'order' => [
+                'code'           => $o['code'],
+                'first_name'     => explode(' ', trim($o['customer']['name']))[0],
+                'status'         => $o['status'],
+                'fulfillment'    => $o['fulfillment'],
+                'is_express'     => $o['is_express'],
+                'created_at'     => $o['created_at'],
+                'ready_at'       => $o['ready_at'],
+                'completed_at'   => $o['completed_at'],
+                'total'          => $o['total'],
+                'balance'        => $o['balance'],
+                'payment_status' => $o['payment_status'],
+                'items'          => array_map(fn ($i) => ['name' => $i['name'], 'unit' => $i['unit'], 'qty' => $i['qty']], $o['items']),
+            ],
+        ];
+    }
+
+    /** A random 32-character secret, e.g. for the tracking link (impossible to guess). */
+    private function newToken(): string
+    {
+        return bin2hex(random_bytes(16));
     }
 
     /** Order/Tag ID format: WH-YYMMDD-0001 (resets daily). */
@@ -690,6 +991,7 @@ class WashHubApi
             return [
                 'id'                => $id,
                 'code'              => $r['code'],
+                'track_token'       => $r['track_token'],
                 'status'            => $r['status'],
                 'fulfillment'       => $r['fulfillment'],
                 'is_express'        => (bool) $r['is_express'],

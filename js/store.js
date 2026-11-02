@@ -80,7 +80,10 @@
     shop_phone: '0900 000 0000',
     pickup_terms: 'Present this claim ticket when picking up. Items unclaimed after 30 days will be donated. Wash Hub is not liable for color bleeding, shrinkage, or items left in pockets. Please check your items before leaving the counter.',
     sms_template: 'Hi {name}! Your laundry ({code}) at {shop} is ready for pickup. Balance due: {balance}. Thank you!',
+    public_url: '',
   };
+  /** Random 32-character secret for the QR tracking link (same format as the PHP version) */
+  const newToken = () => Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) => b.toString(16).padStart(2, '0')).join('');
 
   const LocalDB = {
     db: null,
@@ -173,6 +176,20 @@
         order_create: () => this.createOrder(p),
         order_status: () => this.setStatus(p),
         order_payment: () => this.addPayment(p),
+        track: () => {
+          const o = this.db.orders.find((x) => x.track_token && x.track_token === p.t) || fail('This tracking link is not valid. Please check your claim ticket or contact the shop.');
+          const full = this.out(o);
+          const s = { ...DEFAULT_SETTINGS, ...this.db.settings };
+          return {
+            shop: { name: s.shop_name, phone: s.shop_phone, address: s.shop_address },
+            order: {
+              code: o.code, first_name: String(full.customer.name || '').trim().split(' ')[0], status: o.status, fulfillment: o.fulfillment,
+              is_express: o.is_express, created_at: o.created_at, ready_at: o.ready_at, completed_at: o.completed_at,
+              total: o.total, balance: full.balance, payment_status: o.payment_status,
+              items: o.items.map((i) => ({ name: i.name, unit: i.unit, qty: i.qty })),
+            },
+          };
+        },
         order_notify: () => { const o = this.find(p.id); o.notified_at = iso(new Date()); return this.order(o.id); },
         dashboard: () => this.dashboard(),
         report: () => this.report(p),
@@ -306,6 +323,7 @@
       const o = {
         id: this.nextId('orders'),
         code: prefix + String(lastNo + 1).padStart(4, '0'),
+        track_token: newToken(),
         customer_id: this.resolveCustomer(p.customer || {}, at),
         status: 'received',
         fulfillment: p.fulfillment === 'delivery' ? 'delivery' : 'pickup',
