@@ -75,6 +75,7 @@ class WashHubApi
         'settings_save'    => ['owner'],
         'users'            => ['owner'],
         'user_save'        => ['owner'],
+        'user_delete'      => ['owner'],
     ];
 
     /** True if this role may run this action. $role = null means nobody is logged in. */
@@ -133,6 +134,7 @@ class WashHubApi
             // --- user accounts ---
             case 'users':            return $this->users();
             case 'user_save':        return $this->saveUser($in);
+            case 'user_delete':      return $this->deleteUser((int) ($in['id'] ?? 0));
             case 'account_save':     return $this->saveAccount($in);
             // --- settings & price list ---
             case 'settings_save':    return $this->saveSettings($in);
@@ -450,6 +452,24 @@ class WashHubApi
         } else {
             $this->db->prepare('INSERT INTO wh_users (username, full_name, password_hash, role, active, created_at) VALUES (?, ?, ?, ?, ?, ?)')
                 ->execute([$username, $fullName, password_hash($password, PASSWORD_DEFAULT), $role, $active, $this->dt($this->now())]);
+        }
+        return $this->users();
+    }
+
+    /**
+     * Owner only: permanently delete an account. Payload {id}.
+     * Orders and payments are not linked to user accounts, so no shop records are lost.
+     * The owner can't delete their own account (so the shop always keeps an owner).
+     */
+    private function deleteUser(int $id): array
+    {
+        if ($id === (int) ($this->user['id'] ?? 0)) {
+            throw new InvalidArgumentException("You can't delete your own account.");
+        }
+        $stmt = $this->db->prepare('DELETE FROM wh_users WHERE id = ?');
+        $stmt->execute([$id]);
+        if ($stmt->rowCount() === 0) {
+            throw new InvalidArgumentException('User not found.');
         }
         return $this->users();
     }

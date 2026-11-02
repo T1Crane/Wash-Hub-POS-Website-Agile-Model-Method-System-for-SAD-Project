@@ -18,7 +18,7 @@ A touch-friendly front-desk system for a laundry shop: take orders, print claim 
 | **Claim ticket** | Printable 80 mm receipt: shop logo/name, order ID, **QR code + Code 39 barcode**, item breakdown, weight, totals, payments, balance, pickup terms, plus a cut-off **bag tag**. Scan or type the ticket ID in the top bar to open an order (works with USB barcode scanners). |
 | **QR order tracking** | The customer scans the ticket's QR code with their phone and sees their order's stage, ready time and balance, with no login. The link uses a secret random code per order (order IDs are easy to guess) and shows only the first name. |
 | **Login & roles** | Every user logs in. **Owner** (superadmin): everything. **Admin**: orders, customers, inventory, reports, prices. **Cashier**: New Order, Orders, Customers, payments. **Staff**: Orders board only. The server checks every request; the menu shows only what the role may use. |
-| **Users** (Owner) | Add accounts, change roles, reset passwords, disable people who left (their history stays). The Owner can't demote or disable their own account. |
+| **Users** (Owner) | Add accounts, change roles, reset passwords, disable people who may come back, or delete accounts permanently. The Owner can't demote, disable or delete their own account. |
 | **My Account** (everyone) | Click your name in the sidebar: edit your name and username, change your password (needs the current one). |
 | **Dashboard** | Today's and last-7-days sales, a 7-day sales chart, active/in-progress counts per stage, overdue orders, orders ready for pickup (with "Notify" SMS text), uncollected balances and low-stock alerts. |
 | **Customers** | Profiles with order history and totals. "New order" pre-fills the POS. |
@@ -150,7 +150,7 @@ laravel/               Files that make it run inside Laravel (+ install script)
 - **Everyone logged in:** `bootstrap` (also returns the user's permission list), `account_save`, `orders`, `order`, `order_status`
 - **Owner, Admin, Cashier:** `order_create`, `order_payment`, `order_notify`, `customers`, `customer_save`
 - **Owner, Admin:** `dashboard`, `report`, `inventory`, `inventory_save`, `inventory_adjust`, `inventory_logs`, `service_save`
-- **Owner only:** `settings_save`, `users`, `user_save`
+- **Owner only:** `settings_save`, `users`, `user_save`, `user_delete`
 
 The full list lives in `WashHubApi::PERMISSIONS`. An action not on the list is refused for everyone ("default deny"). Not logged in → HTTP 401; logged in but not allowed → 403.
 

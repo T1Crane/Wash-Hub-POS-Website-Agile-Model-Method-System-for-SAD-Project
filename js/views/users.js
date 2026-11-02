@@ -35,7 +35,9 @@
           </label>
           ${isMe ? '<p class="small muted span-2" style="margin:0">This is your own account: your role and status can\'t be changed here, so the shop is never left without an owner.</p>' : ''}
         </div>`,
-      foot: `<button class="btn" data-close>Cancel</button><button class="btn btn-primary" data-act="save">${WH.icon('check')} Save</button>`,
+      foot: `
+        ${u.id && !isMe ? `<button class="btn btn-danger" data-act="delete">${WH.icon('trash')} Delete account</button><span class="spacer"></span>` : ''}
+        <button class="btn" data-close>Cancel</button><button class="btn btn-primary" data-act="save">${WH.icon('check')} Save</button>`,
       onClose: () => resolve(saved),
     });
     const role = m.el.querySelector('[name="role"]');
@@ -43,6 +45,24 @@
     const showAbout = () => { about.textContent = `Can use: ${WH.ROLES[role.value].about}.`; };
     role.addEventListener('change', showAbout);
     showAbout();
+
+    // Delete: asks first, because it can't be undone. Disabling keeps the account for later instead.
+    const del = m.el.querySelector('[data-act="delete"]');
+    if (del) del.onclick = async () => {
+      const ok = await WH.confirm(
+        'Delete this account?',
+        `<b>${h(u.full_name)}</b> (${h(u.username)}) will be removed permanently and can no longer log in. Orders and payments are not affected.<br><br>
+         Tip: if they might come back, untick <b>Account active</b> instead.`,
+        'Delete permanently'
+      );
+      if (!ok) return;
+      try {
+        await WH.api('user_delete', { id: u.id });
+        saved = true;
+        WH.toast(`${u.full_name}'s account was deleted`, 'success');
+        m.close();
+      } catch (e) { WH.error(e); }
+    };
 
     m.el.querySelector('[data-act="save"]').onclick = async () => {
       const f = WH.formData(m.el);
