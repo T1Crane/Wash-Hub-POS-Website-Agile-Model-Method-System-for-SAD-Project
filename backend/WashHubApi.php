@@ -90,8 +90,8 @@ class WashHubApi
     public const DEFAULT_SETTINGS = [
         'shop_name'     => 'Gap Wash Hub',
         'shop_tagline'  => 'Laundry Services',
-        'shop_address'  => 'Shop address, City',
-        'shop_phone'    => '0900 000 0000',
+        'shop_address'  => 'Lot 3, Blk 14 E, Phase 3C, Tamban St., Kaunlaran Vill., Caloocan City',
+        'shop_phone'    => 'Smart: 0920 890 3787 · Globe: 0915 779 6070',
         'pickup_terms'  => 'Present this claim ticket when picking up. Items unclaimed after 30 days will be donated. '
                          . 'Gap Wash Hub is not liable for color bleeding, shrinkage, or items left in pockets. '
                          . 'Please check your items before leaving the counter.',
@@ -338,6 +338,12 @@ class WashHubApi
         foreach (self::DEFAULT_SETTINGS as $key => $value) {
             $stmt->execute([$key, $value]);
         }
+
+        // Replace the old placeholder address and phone with the shop's real ones (only if never edited)
+        $this->db->prepare("UPDATE wh_settings SET svalue = ? WHERE skey = 'shop_address' AND svalue = 'Shop address, City'")
+            ->execute([self::DEFAULT_SETTINGS['shop_address']]);
+        $this->db->prepare("UPDATE wh_settings SET svalue = ? WHERE skey = 'shop_phone' AND svalue = '0900 000 0000'")
+            ->execute([self::DEFAULT_SETTINGS['shop_phone']]);
 
         // Rebrand "Wash Hub" -> "Gap Wash Hub", but only where the old default text was never changed
         $this->db->prepare("UPDATE wh_settings SET svalue = ? WHERE skey = 'shop_name' AND svalue = 'Wash Hub'")

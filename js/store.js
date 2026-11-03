@@ -76,8 +76,8 @@
   const DEFAULT_SETTINGS = {
     shop_name: 'Gap Wash Hub',
     shop_tagline: 'Laundry Services',
-    shop_address: 'Shop address, City',
-    shop_phone: '0900 000 0000',
+    shop_address: 'Lot 3, Blk 14 E, Phase 3C, Tamban St., Kaunlaran Vill., Caloocan City',
+    shop_phone: 'Smart: 0920 890 3787 · Globe: 0915 779 6070',
     pickup_terms: 'Present this claim ticket when picking up. Items unclaimed after 30 days will be donated. Gap Wash Hub is not liable for color bleeding, shrinkage, or items left in pockets. Please check your items before leaving the counter.',
     sms_template: 'Hi {name}! Your laundry ({code}) at {shop} is ready for pickup. Balance due: {balance}. Thank you!',
     public_url: '',
@@ -97,6 +97,8 @@
       if (!this.db) this.db = this.seed();
       // Rebrand saved demo data from before the name change (only if the name was never edited)
       if (this.db.settings && this.db.settings.shop_name === 'Wash Hub') this.db.settings.shop_name = DEFAULT_SETTINGS.shop_name;
+      if (this.db.settings && this.db.settings.shop_address === 'Shop address, City') this.db.settings.shop_address = DEFAULT_SETTINGS.shop_address;
+      if (this.db.settings && this.db.settings.shop_phone === '0900 000 0000') this.db.settings.shop_phone = DEFAULT_SETTINGS.shop_phone;
       // Old demo data still has the old starter price list -> start fresh with the shop's real price list
       if (this.db.services && this.db.services.some((s) => s.name === 'Wash-Dry-Fold' && s.unit === 'kg')) {
         this.db = null;
