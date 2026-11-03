@@ -345,13 +345,24 @@ class WashHubApi
         $this->db->prepare("UPDATE wh_settings SET svalue = ? WHERE skey = 'pickup_terms' AND svalue = ?")
             ->execute([self::DEFAULT_SETTINGS['pickup_terms'], str_replace('Gap Wash Hub', 'Wash Hub', self::DEFAULT_SETTINGS['pickup_terms'])]);
 
-        // Switch databases that still have the OLD starter price list (per-kg Wash-Dry-Fold etc.)
-        // to the shop's real price list: old services are turned off (not deleted, so old tickets stay correct)
-        $oldList = (int) $this->db->query("SELECT COUNT(*) FROM wh_services WHERE name = 'Wash-Dry-Fold' AND unit = 'kg'")->fetchColumn();
-        $newList = (int) $this->db->query("SELECT COUNT(*) FROM wh_services WHERE name = 'Wash'")->fetchColumn();
-        if ($oldList > 0 && $newList === 0) {
-            $this->db->exec("UPDATE wh_services SET active = 0, sort_order = sort_order + 100 WHERE name IN ('Wash-Dry-Fold', 'Dry Cleaning', 'Ironing / Pressing', 'Comforter / Blanket', 'Express Add-on (Same Day)')");
-            $this->insertDefaultServices();
+        // Replace the OLD starter price list (per-kg Wash-Dry-Fold etc.) with the shop's real price list.
+        // The old services are deleted. Past orders are not affected: each order line keeps its own
+        // copy of the service name and price (see wh_order_items).
+        $oldStarter = "(name = 'Wash-Dry-Fold' AND unit = 'kg' AND price = 35)
+                    OR (name = 'Dry Cleaning' AND unit = 'pc' AND price = 180)
+                    OR (name = 'Ironing / Pressing' AND unit = 'pc' AND price = 20)
+                    OR (name = 'Comforter / Blanket' AND unit = 'pc' AND price = 150)
+                    OR (name = 'Express Add-on (Same Day)' AND unit = 'flat' AND price = 60)";
+        // Runs only once per database (remembered in wh_settings), so services added later are never touched
+        $done = (int) $this->db->query("SELECT COUNT(*) FROM wh_settings WHERE skey = 'upgrade_price_list'")->fetchColumn();
+        if (!$done) {
+            if ((int) $this->db->query("SELECT COUNT(*) FROM wh_services WHERE $oldStarter")->fetchColumn() > 0) {
+                $this->db->exec("DELETE FROM wh_services WHERE $oldStarter");
+                if ((int) $this->db->query("SELECT COUNT(*) FROM wh_services WHERE name = 'Wash'")->fetchColumn() === 0) {
+                    $this->insertDefaultServices();
+                }
+            }
+            $this->db->exec("INSERT IGNORE INTO wh_settings (skey, svalue) VALUES ('upgrade_price_list', 'done')");
         }
 
         if ((int) $this->db->query('SELECT COUNT(*) FROM wh_services')->fetchColumn() === 0) {

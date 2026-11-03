@@ -97,6 +97,12 @@
       if (!this.db) this.db = this.seed();
       // Rebrand saved demo data from before the name change (only if the name was never edited)
       if (this.db.settings && this.db.settings.shop_name === 'Wash Hub') this.db.settings.shop_name = DEFAULT_SETTINGS.shop_name;
+      // Old demo data still has the old starter price list -> start fresh with the shop's real price list
+      if (this.db.services && this.db.services.some((s) => s.name === 'Wash-Dry-Fold' && s.unit === 'kg')) {
+        this.db = null;
+        try { localStorage.removeItem(KEY); } catch (e) { /* ignore */ }
+        this.db = this.seed();
+      }
       return this.db;
     },
     save() {
