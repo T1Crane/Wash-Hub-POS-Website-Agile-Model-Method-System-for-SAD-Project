@@ -14,11 +14,11 @@ A touch-friendly front-desk system for a laundry shop: take orders, print claim 
 | Module | What it does |
 |---|---|
 | **New Order (POS counter)** | Tap service tiles (Wash-Dry-Fold per kg, Dry Cleaning per piece, Ironing, Comforter, Express add-on). Enter weight in kg or piece counts with +/− steppers. Price is computed live. Search a customer by name/phone or quick-add one (name, phone, address/notes). Pickup or delivery, discount, notes. Payment: Cash / GCash / Card, amount received, change, and an automatic **Paid / Partial / Unpaid** status. Each order gets an auto-generated ID (`WH-YYMMDD-0001`) and an estimated ready time. |
-| **Orders board** | Kanban columns **Received → Washing → Drying → Folding/Ready → Picked Up/Delivered**. One tap moves an order to the next stage, with Undo. Overdue orders are highlighted. There's also a List view with filters. Before releasing an order with an unpaid balance, the app asks you to collect payment. Owner, Admin and Cashier can **delete** a wrong order from its detail window (with a warning if money was already paid on it). |
+| **Orders board** | Kanban columns **Received → Washing → Drying → Folding/Ready → Picked Up/Delivered**. One tap moves an order to the next stage, with Undo. Overdue orders are highlighted. There's also a List view with filters. Before releasing an order with an unpaid balance, the app asks you to collect payment. Both sides can **delete** a wrong order from its detail window (with a warning if money was already paid on it). |
 | **Claim ticket** | Printable 80 mm receipt: shop logo/name, order ID, **QR code + Code 39 barcode**, item breakdown, weight, totals, payments, balance, pickup terms, plus a cut-off **bag tag**. Scan or type the ticket ID in the top bar to open an order (works with USB barcode scanners). |
 | **QR order tracking** | The customer scans the ticket's QR code with their phone and sees their order's stage, ready time and balance, with no login. The link uses a secret random code per order (order IDs are easy to guess) and shows only the first name. |
-| **Login & roles** | Every user logs in. **Owner** (superadmin): everything. **Admin**: orders, customers, inventory, reports, prices. **Cashier**: New Order, Orders, Customers, payments. **Staff**: Orders board only. The server checks every request; the menu shows only what the role may use. |
-| **Users** (Owner) | Add accounts, change roles, reset passwords, disable people who may come back, or delete accounts permanently. The Owner can't demote, disable or delete their own account. |
+| **Login & roles** | Every user logs in. The system has two sides. **Owner / Admin**: everything. **Staff**: New Order, Orders board, Customers and payments; **no Reports and no Users page** (also no Dashboard, Inventory or Settings). The server checks every request; the menu shows only what the role may use. |
+| **Users** (Owner / Admin) | Add accounts, choose Owner / Admin or Staff, reset passwords, disable people who may come back, or delete accounts permanently. You can't demote, disable or delete your own account. |
 | **My Account** (everyone) | Click your name in the sidebar: edit your name and username, change your password (needs the current one). |
 | **Dashboard** | Today's and last-7-days sales, a 7-day sales chart, active/in-progress counts per stage, overdue orders, orders ready for pickup (with "Notify" SMS text), uncollected balances and low-stock alerts. |
 | **Customers** | Profiles with order history and totals. "New order" pre-fills the POS. |
@@ -47,7 +47,7 @@ The app picks its data mode by itself:
 
 That's it: on first load `api.php` creates the database `washhub_pos`, all tables, the price list and sample supplies. To use a different MySQL user, password or port, edit [`config.php`](config.php).
 
-4. Log in with the first Owner account: **`owner` / `owner123`**. Change the password right away (click your name → My Account), then add your staff under **Users**.
+4. Log in with the first Owner / Admin account: **`owner` / `owner123`**. Change the password right away (click your name → My Account), then add your staff under **Users**.
 5. For the QR codes to work on customers' phones: **Settings → QR code link on tickets** → enter this PC's network address, e.g. `http://192.168.1.189/washhub/` (run `ipconfig` to find it). Phones must be on the shop Wi-Fi.
 
 *(Optional)* To create the tables by hand, import [`database/washhub_pos.sql`](database/washhub_pos.sql) in phpMyAdmin (http://localhost/phpmyadmin → Import).
@@ -116,7 +116,7 @@ js/
     inventory.js       Inventory
     reports.js         Reports
     settings.js        Settings & price list
-    users.js           User accounts (Owner only)
+    users.js           User accounts (Owner / Admin only)
     account.js         My Account (every user)
 api.php                JSON API for XAMPP  (api.php?action=...): login session + permission check
 .htaccess              Tells the browser to always check for the newest JS/CSS
@@ -140,7 +140,7 @@ laravel/               Files that make it run inside Laravel (+ install script)
 | `wh_order_logs` | Status history (audit trail of the board) |
 | `wh_inventory` / `wh_inventory_logs` | Supplies and their stock movements |
 | `wh_settings` | Shop name, address, ticket terms, SMS template, QR code link |
-| `wh_users` | Login accounts: username, full name, **hashed** password (never the real one), role (`owner` / `admin` / `cashier` / `staff`), active, last login |
+| `wh_users` | Login accounts: username, full name, **hashed** password (never the real one), role (`admin` = Owner / Admin side, `staff` = Staff side), active, last login |
 
 ### API actions (for documentation / testing)
 
@@ -148,9 +148,8 @@ laravel/               Files that make it run inside Laravel (+ install script)
 
 - **No login needed:** `ping`, `login`, `logout`, `me`, `track` (QR page, needs the order's secret code)
 - **Everyone logged in:** `bootstrap` (also returns the user's permission list), `account_save`, `orders`, `order`, `order_status`
-- **Owner, Admin, Cashier:** `order_delete`, `order_create`, `order_payment`, `order_notify`, `customers`, `customer_save`
-- **Owner, Admin:** `dashboard`, `report`, `inventory`, `inventory_save`, `inventory_adjust`, `inventory_logs`, `service_save`
-- **Owner only:** `settings_save`, `users`, `user_save`, `user_delete`
+- **Both sides (Owner / Admin and Staff):** `order_delete`, `order_create`, `order_payment`, `order_notify`, `customers`, `customer_save`
+- **Owner / Admin only:** `dashboard`, `report`, `inventory`, `inventory_save`, `inventory_adjust`, `inventory_logs`, `service_save`, `settings_save`, `users`, `user_save`, `user_delete`
 
 The full list lives in `WashHubApi::PERMISSIONS`. An action not on the list is refused for everyone ("default deny"). Not logged in → HTTP 401; logged in but not allowed → 403.
 
@@ -169,7 +168,7 @@ Example: http://localhost/washhub/api.php?action=orders&status=active
 | Laravel shows 419 | The page must be opened through the `/washhub` route (it supplies the CSRF token). |
 | Wrong times | The shop timezone is `Asia/Manila` (`WashHubApi::TIMEZONE`). |
 | "Can't load the app — Please log in first" with no login screen | The browser is running an old cached `index.js`. Press **Ctrl+F5**. |
-| Forgot the Owner password | If another Owner exists, they can reset it under **Users**. Otherwise, in phpMyAdmin run `DELETE FROM wh_users;` and reload the app: it recreates `owner` / `owner123`. Orders and customers are not affected, but staff accounts must be added again. |
+| Forgot the Owner / Admin password | If another Owner / Admin exists, they can reset it under **Users**. Otherwise, in phpMyAdmin run `DELETE FROM wh_users;` and reload the app: it recreates `owner` / `owner123`. Orders and customers are not affected, but staff accounts must be added again. |
 | QR code opens nothing on the phone | Set **Settings → QR code link** to the PC's network address (not `localhost`), and connect the phone to the same Wi-Fi. |
 
 > Team note (see CodesReferences.txt): every file starts with a comment explaining what it's for, and each section is labeled. Please keep adding comments when you change code.

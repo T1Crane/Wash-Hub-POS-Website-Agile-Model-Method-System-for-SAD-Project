@@ -43,40 +43,38 @@ class WashHubApi
     /** Accepted payment methods. */
     public const PAYMENT_METHODS = ['cash', 'gcash', 'card'];
 
-    /** User roles, highest first. owner = superadmin. */
-    public const ROLES = ['owner', 'admin', 'cashier', 'staff'];
+    /** The two sides of the system: admin = Owner / Admin (full access), staff = Staff. */
+    public const ROLES = ['admin', 'staff'];
 
     /** Actions anyone may call without logging in. */
     public const PUBLIC_ACTIONS = ['ping', 'login', 'logout', 'me', 'track'];
 
     /** Who may do what: action => roles allowed. Not listed = nobody (default deny). */
     public const PERMISSIONS = [
-        'bootstrap'        => ['owner', 'admin', 'cashier', 'staff'],
-        'account_save'     => ['owner', 'admin', 'cashier', 'staff'],  // "My Account": edit your own profile
-        // Orders board: everyone, including staff
-        'orders'           => ['owner', 'admin', 'cashier', 'staff'],
-        'order'            => ['owner', 'admin', 'cashier', 'staff'],
-        'order_status'     => ['owner', 'admin', 'cashier', 'staff'],
-        // Front desk
-        'order_create'     => ['owner', 'admin', 'cashier'],
-        'order_payment'    => ['owner', 'admin', 'cashier'],
-        'order_notify'     => ['owner', 'admin', 'cashier'],
-        'order_delete'     => ['owner', 'admin', 'cashier'],  // staff can't delete orders
-        'customers'        => ['owner', 'admin', 'cashier'],
-        'customer_save'    => ['owner', 'admin', 'cashier'],
-        // Management
-        'dashboard'        => ['owner', 'admin'],
-        'report'           => ['owner', 'admin'],
-        'inventory'        => ['owner', 'admin'],
-        'inventory_logs'   => ['owner', 'admin'],
-        'inventory_save'   => ['owner', 'admin'],
-        'inventory_adjust' => ['owner', 'admin'],
-        'service_save'     => ['owner', 'admin'],
-        // Owner only
-        'settings_save'    => ['owner'],
-        'users'            => ['owner'],
-        'user_save'        => ['owner'],
-        'user_delete'      => ['owner'],
+        'bootstrap'        => ['admin', 'staff'],
+        'account_save'     => ['admin', 'staff'],  // "My Account": edit your own profile
+        // Both sides: front desk and Orders board
+        'orders'           => ['admin', 'staff'],
+        'order'            => ['admin', 'staff'],
+        'order_status'     => ['admin', 'staff'],
+        'order_create'     => ['admin', 'staff'],
+        'order_payment'    => ['admin', 'staff'],
+        'order_notify'     => ['admin', 'staff'],
+        'order_delete'     => ['admin', 'staff'],
+        'customers'        => ['admin', 'staff'],
+        'customer_save'    => ['admin', 'staff'],
+        // Owner / Admin side only (Staff can't see Reports or Users)
+        'dashboard'        => ['admin'],
+        'report'           => ['admin'],
+        'inventory'        => ['admin'],
+        'inventory_logs'   => ['admin'],
+        'inventory_save'   => ['admin'],
+        'inventory_adjust' => ['admin'],
+        'service_save'     => ['admin'],
+        'settings_save'    => ['admin'],
+        'users'            => ['admin'],
+        'user_save'        => ['admin'],
+        'user_delete'      => ['admin'],
     ];
 
     /** True if this role may run this action. $role = null means nobody is logged in. */
@@ -90,16 +88,38 @@ class WashHubApi
 
     /** Shop settings that the Settings page is allowed to change (key => default). */
     public const DEFAULT_SETTINGS = [
-        'shop_name'     => 'Wash Hub',
+        'shop_name'     => 'Gap Wash Hub',
         'shop_tagline'  => 'Laundry Services',
         'shop_address'  => 'Shop address, City',
         'shop_phone'    => '0900 000 0000',
         'pickup_terms'  => 'Present this claim ticket when picking up. Items unclaimed after 30 days will be donated. '
-                         . 'Wash Hub is not liable for color bleeding, shrinkage, or items left in pockets. '
+                         . 'Gap Wash Hub is not liable for color bleeding, shrinkage, or items left in pockets. '
                          . 'Please check your items before leaving the counter.',
         'sms_template'  => 'Hi {name}! Your laundry ({code}) at {shop} is ready for pickup. Balance due: {balance}. Thank you!',
         // Web address the QR code on tickets points to (blank = the address the app is opened with)
         'public_url'    => '',
+    ];
+
+    /**
+     * Starter price list = the shop's paper order form (Gap Wash Hub Laundry Form).
+     * Prices are per load / per item, so every unit is "pc" (quantity).
+     * name, unit, price (PHP), turnaround hours, is express, tile color
+     */
+    public const DEFAULT_SERVICES = [
+        ['Wash',                       'pc', 65,  24, 0, 'blue'],
+        ['Wash & Dry',                 'pc', 130, 24, 0, 'blue'],
+        ['Dry',                        'pc', 80,  24, 0, 'amber'],
+        ['Dry & Fold',                 'pc', 100, 24, 0, 'amber'],
+        ['Wash, Dry, & Fold',          'pc', 150, 24, 0, 'teal'],
+        ['Spin & Dry',                 'pc', 100, 24, 0, 'teal'],
+        ['Package A',                  'pc', 180, 24, 0, 'violet'],
+        ['Package B',                  'pc', 200, 24, 0, 'violet'],
+        ['Package C',                  'pc', 220, 24, 0, 'violet'],
+        ['Addt Detergent',             'pc', 15,  24, 0, 'green'],
+        ['Addt Fabcon',                'pc', 15,  24, 0, 'green'],
+        ['Over 8 kilos (Wash & Dry)',  'pc', 40,  24, 0, 'pink'],
+        ['Over 8 kilos (Wash or Dry)', 'pc', 20,  24, 0, 'pink'],
+        ['Blue Plastic',               'pc', 12,  24, 0, 'slate'],
     ];
 
     private PDO $db;
@@ -287,7 +307,7 @@ class WashHubApi
                 username      VARCHAR(50)  NOT NULL UNIQUE,
                 full_name     VARCHAR(100) NOT NULL,
                 password_hash VARCHAR(255) NOT NULL,
-                role          ENUM('owner','admin','cashier', 'staff') NOT NULL DEFAULT 'cashier',
+                role          ENUM('admin','staff') NOT NULL DEFAULT 'staff',
                 active        TINYINT(1) NOT NULL DEFAULT 1,
                 created_at    DATETIME NOT NULL,
                 last_login_at DATETIME NULL
@@ -319,18 +339,23 @@ class WashHubApi
             $stmt->execute([$key, $value]);
         }
 
+        // Rebrand "Wash Hub" -> "Gap Wash Hub", but only where the old default text was never changed
+        $this->db->prepare("UPDATE wh_settings SET svalue = ? WHERE skey = 'shop_name' AND svalue = 'Wash Hub'")
+            ->execute([self::DEFAULT_SETTINGS['shop_name']]);
+        $this->db->prepare("UPDATE wh_settings SET svalue = ? WHERE skey = 'pickup_terms' AND svalue = ?")
+            ->execute([self::DEFAULT_SETTINGS['pickup_terms'], str_replace('Gap Wash Hub', 'Wash Hub', self::DEFAULT_SETTINGS['pickup_terms'])]);
+
+        // Switch databases that still have the OLD starter price list (per-kg Wash-Dry-Fold etc.)
+        // to the shop's real price list: old services are turned off (not deleted, so old tickets stay correct)
+        $oldList = (int) $this->db->query("SELECT COUNT(*) FROM wh_services WHERE name = 'Wash-Dry-Fold' AND unit = 'kg'")->fetchColumn();
+        $newList = (int) $this->db->query("SELECT COUNT(*) FROM wh_services WHERE name = 'Wash'")->fetchColumn();
+        if ($oldList > 0 && $newList === 0) {
+            $this->db->exec("UPDATE wh_services SET active = 0, sort_order = sort_order + 100 WHERE name IN ('Wash-Dry-Fold', 'Dry Cleaning', 'Ironing / Pressing', 'Comforter / Blanket', 'Express Add-on (Same Day)')");
+            $this->insertDefaultServices();
+        }
+
         if ((int) $this->db->query('SELECT COUNT(*) FROM wh_services')->fetchColumn() === 0) {
-            $stmt = $this->db->prepare('INSERT INTO wh_services (name, unit, price, turnaround_hours, is_express, color, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?)');
-            // name, unit, price (PHP), turnaround hours, is express, tile color, order
-            foreach ([
-                ['Wash-Dry-Fold',          'kg',   35,  24, 0, 'blue',   1],
-                ['Dry Cleaning',           'pc',   180, 72, 0, 'violet', 2],
-                ['Ironing / Pressing',     'pc',   20,  24, 0, 'amber',  3],
-                ['Comforter / Blanket',    'pc',   150, 48, 0, 'teal',   4],
-                ['Express Add-on (Same Day)', 'flat', 60, 6, 1, 'red',   5],
-            ] as $row) {
-                $stmt->execute($row);
-            }
+            $this->insertDefaultServices();
         }
 
         if ((int) $this->db->query('SELECT COUNT(*) FROM wh_inventory')->fetchColumn() === 0) {
@@ -348,11 +373,30 @@ class WashHubApi
             }
         }
 
-        // First run: create the Owner account so someone can log in.
+        // Upgrade from the old 4 roles to the 2 sides:
+        // owner + admin -> admin (Owner / Admin side), cashier + staff -> staff (Staff side)
+        $roleType = $this->db->query("SHOW COLUMNS FROM wh_users LIKE 'role'")->fetch(PDO::FETCH_ASSOC)['Type'] ?? '';
+        if (str_contains($roleType, 'owner') || str_contains($roleType, 'cashier')) {
+            $this->db->exec("ALTER TABLE wh_users MODIFY role ENUM('owner','admin','cashier','staff') NOT NULL DEFAULT 'staff'");
+            $this->db->exec("UPDATE wh_users SET role = 'admin' WHERE role = 'owner'");
+            $this->db->exec("UPDATE wh_users SET role = 'staff' WHERE role = 'cashier'");
+            $this->db->exec("ALTER TABLE wh_users MODIFY role ENUM('admin','staff') NOT NULL DEFAULT 'staff'");
+        }
+
+        // First run: create the Owner / Admin account so someone can log in.
         // Default login: owner / owner123  (change it after the first login!)
         if ((int) $this->db->query('SELECT COUNT(*) FROM wh_users')->fetchColumn() === 0) {
             $this->db->prepare('INSERT INTO wh_users (username, full_name, password_hash, role, created_at) VALUES (?, ?, ?, ?, ?)')
-                ->execute(['owner', 'Shop Owner', password_hash('owner123', PASSWORD_DEFAULT), 'owner', $this->dt($this->now())]);
+                ->execute(['owner', 'Shop Owner', password_hash('owner123', PASSWORD_DEFAULT), 'admin', $this->dt($this->now())]);
+        }
+    }
+
+    /** Adds the shop's price list (DEFAULT_SERVICES), in the same order as the paper form. */
+    private function insertDefaultServices(): void
+    {
+        $stmt = $this->db->prepare('INSERT INTO wh_services (name, unit, price, turnaround_hours, is_express, color, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?)');
+        foreach (self::DEFAULT_SERVICES as $i => $row) {
+            $stmt->execute([...$row, $i + 1]);
         }
     }
 
@@ -375,7 +419,7 @@ class WashHubApi
             throw new InvalidArgumentException('Wrong username or password.');
         }
         if (!$user['active']) {
-            throw new InvalidArgumentException('This account is disabled. Please ask the owner.');
+            throw new InvalidArgumentException('This account is disabled. Please ask the Owner / Admin.');
         }
 
         $this->db->prepare('UPDATE wh_users SET last_login_at = ? WHERE id = ?')
@@ -387,7 +431,7 @@ class WashHubApi
     /**
      * Reloads a logged-in user from the database (called on every request).
      * Returns null if the account was deleted or disabled, which logs them out.
-     * This makes a role change by the owner take effect right away.
+     * This makes a role change by the Owner / Admin take effect right away.
      */
     public function freshUser(int $id): ?array
     {
@@ -404,10 +448,10 @@ class WashHubApi
         return array_values(array_filter(array_keys(self::PERMISSIONS), fn ($action) => self::allowed($role, $action)));
     }
 
-    /** Owner only: list every account (never the password hashes). */
+    /** Owner / Admin only: list every account (never the password hashes). */
     private function users(): array
     {
-        $rows = $this->db->query("SELECT * FROM wh_users ORDER BY FIELD(role, 'owner', 'admin', 'cashier', 'staff'), full_name")
+        $rows = $this->db->query("SELECT * FROM wh_users ORDER BY FIELD(role, 'admin', 'staff'), full_name")
             ->fetchAll(PDO::FETCH_ASSOC);
         return array_map(fn ($u) => $this->publicUser($u) + [
             'active'        => (bool) $u['active'],
@@ -417,7 +461,7 @@ class WashHubApi
     }
 
     /**
-     * Owner only: create (no id) or edit (with id) an account.
+     * Owner / Admin only: create (no id) or edit (with id) an account.
      * Payload {id?, full_name, username, role, active, password}. Password is optional when editing (blank = keep).
      */
     private function saveUser(array $in): array
@@ -432,7 +476,7 @@ class WashHubApi
         if (!in_array($role, self::ROLES, true)) {
             throw new InvalidArgumentException('Choose a role.');
         }
-        // Lock-out protection: the owner can't demote or disable their own account
+        // Lock-out protection: you can't demote or disable their own account
         if ($id > 0 && $id === (int) ($this->user['id'] ?? 0) && ($role !== $this->user['role'] || !$active)) {
             throw new InvalidArgumentException("You can't change your own role or disable your own account.");
         }
@@ -459,9 +503,9 @@ class WashHubApi
     }
 
     /**
-     * Owner only: permanently delete an account. Payload {id}.
+     * Owner / Admin only: permanently delete an account. Payload {id}.
      * Orders and payments are not linked to user accounts, so no shop records are lost.
-     * The owner can't delete their own account (so the shop always keeps an owner).
+     * You can't delete your own account (so the shop always keeps an Owner / Admin).
      */
     private function deleteUser(int $id): array
     {
@@ -966,7 +1010,7 @@ class WashHubApi
 
     /** Marks that the customer was already texted/called that the laundry is ready. */
     /**
-     * Owner/Admin: permanently delete a wrong order (e.g. a typo in the weight or the wrong customer).
+     * Both sides: permanently delete a wrong order (e.g. a typo in the weight or the wrong customer).
      * Its items, payments and status history are deleted with it (ON DELETE CASCADE),
      * so any payment on it also disappears from the sales reports. The customer profile stays.
      */

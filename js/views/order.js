@@ -17,9 +17,9 @@
     const next = WH.nextStatus(order.status);
     if (!next) return null;
     try {
-      // Staff can't take payments, so an unpaid order must be released by the cashier
+      // A role that can't take payments must leave unpaid orders to someone who can
       if (next.key === 'completed' && order.balance > 0 && !WH.can('order_payment')) {
-        WH.toast(`${order.code} still has ${WH.money(order.balance)} unpaid. Ask the cashier to collect it and release the order.`, 'error', null, 6000);
+        WH.toast(`${order.code} still has ${WH.money(order.balance)} unpaid. Ask someone at the counter to collect it and release the order.`, 'error', null, 6000);
         return null;
       }
       // Picking up with an unpaid balance -> ask first

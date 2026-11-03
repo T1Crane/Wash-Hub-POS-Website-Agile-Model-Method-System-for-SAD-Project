@@ -15,12 +15,12 @@
   WH.views.settings = (view) => {
     const s = WH.state.settings;
     const local = WH.store.mode === 'local';
-    const canEditShop = WH.can('settings_save'); // Owner only; the Admin sees these read-only
+    const canEditShop = WH.can('settings_save'); // Owner / Admin only
 
     view.innerHTML = `
       <div class="page-grid">
         <div class="card">
-          <div class="card-head"><h2>Shop details</h2><span class="small muted">${canEditShop ? 'Shown on the claim ticket' : 'Only the Owner can change these'}</span></div>
+          <div class="card-head"><h2>Shop details</h2><span class="small muted">${canEditShop ? 'Shown on the claim ticket' : 'Only Owner / Admin can change these'}</span></div>
           <fieldset ${canEditShop ? '' : 'disabled'} style="border:0;padding:0;margin:0;min-width:0">
           <div class="grid-2" id="set-shop">
             <label class="field">Shop name<input type="text" name="shop_name" value="${h(s.shop_name)}"></label>

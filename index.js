@@ -28,7 +28,7 @@
   ];
 
   /** The pages the logged-in user may open. The first one is their start page
-      (Owner/Admin: Dashboard, Cashier: New Order, Staff: Orders). */
+      (Owner / Admin: Dashboard, Staff: New Order). */
   WH.myRoutes = () => ROUTES.filter((r) => WH.can(r.need) && !(r.server && WH.store.mode !== 'mysql'));
 
   WH.state = { settings: {}, services: [] };
@@ -61,7 +61,7 @@
     if (current && current.handle && current.handle.destroy) current.handle.destroy();
     document.getElementById('modal-root').innerHTML = ''; // close dialogs left open on the old page
     const route = ROUTES.find((r) => r.key === key);
-    document.title = `${route.label} · ${WH.state.settings.shop_name || 'Wash Hub'} POS`;
+    document.title = `${route.label} · ${WH.state.settings.shop_name || 'Gap Wash Hub'} POS`;
     document.getElementById('page-title').textContent = route.label;
     document.querySelectorAll('.nav a').forEach((a) => a.classList.toggle('active', a.dataset.key === key));
     const chip = document.querySelector('.user-chip');
@@ -80,7 +80,7 @@
     const { key } = parseHash();
     document.getElementById('sidebar').innerHTML = `
       <div class="brand">${WH.logo('brand-logo')}
-        <div class="brand-text"><div class="brand-name">${h(s.shop_name || 'Wash Hub')}</div><div class="brand-sub">POS & Inventory</div></div></div>
+        <div class="brand-text"><div class="brand-name">${h(s.shop_name || 'Gap Wash Hub')}</div><div class="brand-sub">POS & Inventory</div></div></div>
       <nav class="nav" aria-label="Main">
         ${WH.myRoutes().filter((r) => !r.hidden).map((r) => `<a href="#/${r.key}" data-key="${r.key}" title="${r.label}">${WH.icon(r.icon)}<span class="lbl">${r.label}</span><span class="badge hidden" data-badge="${r.key}"></span></a>`).join('')}
       </nav>
@@ -150,7 +150,7 @@
       <div class="login-wrap">
         <form class="login-card" id="login-form">
           ${WH.logo('brand-logo')}
-          <h1>${h(WH.state.settings.shop_name || 'Wash Hub')}</h1>
+          <h1>${h(WH.state.settings.shop_name || 'Gap Wash Hub')}</h1>
           <p class="sub">Sign in to the POS</p>
           <div id="login-error"></div>
           <div class="stack">
@@ -238,12 +238,12 @@
       return;
     }
 
-    // MySQL mode needs a login. (Demo mode has no server, so everyone is the Owner.)
+    // MySQL mode needs a login. (Demo mode has no server, so everyone is Owner / Admin.)
     if (WH.store.mode === 'mysql') {
       WH.state.user = await WH.api('me');
       if (!WH.state.user) WH.state.user = await showLogin();
     } else {
-      WH.state.user = { id: 0, username: 'demo', full_name: 'Demo User', role: 'owner' };
+      WH.state.user = { id: 0, username: 'demo', full_name: 'Demo User', role: 'admin' };
     }
 
     try {

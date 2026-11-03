@@ -67,11 +67,10 @@ window.WH = window.WH || {};
   WH.itemsSummary = (items) => items.map((i) => (i.unit === 'flat' ? i.name : `${WH.qtyLabel(i.qty, i.unit)} ${i.name}`)).join(' · ');
 
   // ---------- User roles & permissions ----------
+  // The two sides of the system (same keys as WashHubApi::ROLES)
   WH.ROLES = {
-    owner:   { label: 'Owner',   about: 'Everything, including user accounts and shop settings' },
-    admin:   { label: 'Admin',   about: 'Orders, customers, inventory, reports and the price list' },
-    cashier: { label: 'Cashier', about: 'New orders, payments, the Orders board and customers' },
-    staff:   { label: 'Staff',   about: 'Orders board only: move orders between stages' },
+    admin: { label: 'Owner / Admin', about: 'Everything: orders, customers, dashboard, inventory, reports, prices, shop settings and user accounts' },
+    staff: { label: 'Staff',         about: 'New orders, payments, the Orders board and customers (no Reports or Users)' },
   };
   WH.roleLabel = (role) => (WH.ROLES[role] || { label: role }).label;
   WH.rolePill = (role) => `<span class="pill role-${WH.h(role)}">${WH.h(WH.roleLabel(role))}</span>`;
@@ -164,19 +163,11 @@ window.WH = window.WH || {};
   };
   WH.icon = (name, cls = '') => `<svg class="icon ${cls}" viewBox="0 0 24 24" aria-hidden="true">${ICONS[name] || ''}</svg>`;
 
-  /** Wash Hub logo (washing machine + bubbles). Used in sidebar and on the claim ticket. */
-  WH.logo = (cls = '') => `
-    <svg class="${cls}" viewBox="0 0 64 64" aria-label="Wash Hub logo" role="img">
-      <rect x="6" y="4" width="52" height="56" rx="12" fill="#2f6bff"/>
-      <rect x="6" y="4" width="52" height="14" rx="12" fill="#1747c9"/>
-      <rect x="6" y="12" width="52" height="6" fill="#1747c9"/>
-      <circle cx="16" cy="11" r="2.6" fill="#bcd0ff"/><circle cx="24" cy="11" r="2.6" fill="#bcd0ff"/>
-      <rect x="38" y="9" width="13" height="4" rx="2" fill="#bcd0ff"/>
-      <circle cx="32" cy="38" r="15" fill="#fff"/>
-      <circle cx="32" cy="38" r="11" fill="#7fd4ff"/>
-      <path d="M21 39c4 3 7-3 11 0s7 3 11 0v3a11 11 0 0 1-22 0z" fill="#2f9be0"/>
-      <circle cx="28" cy="33" r="2.4" fill="#fff" opacity=".9"/><circle cx="35" cy="30" r="1.6" fill="#fff" opacity=".9"/>
-    </svg>`;
+  /** Address of a file in the assets folder. Laravel sets window.WASHHUB_ASSETS (files live in public/vendor/washhub/). */
+  WH.asset = (path) => (window.WASHHUB_ASSETS || '') + path;
+
+  /** Gap Wash Hub logo (assets/logo.png). Used in the sidebar, login screen, tracking page and claim ticket. */
+  WH.logo = (cls = '') => `<img class="${cls}" src="${WH.asset('assets/logo.png')}" alt="Gap Wash Hub logo">`;
 
   // ---------- DOM helpers ----------
   WH.$ = (sel, root = document) => root.querySelector(sel);

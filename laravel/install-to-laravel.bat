@@ -32,6 +32,7 @@ if not exist "%DEST%\public\vendor\washhub" mkdir "%DEST%\public\vendor\washhub"
 copy /Y "%SRC%\index.css" "%DEST%\public\vendor\washhub\index.css" >nul
 copy /Y "%SRC%\index.js" "%DEST%\public\vendor\washhub\index.js" >nul
 xcopy /E /I /Y /Q "%SRC%\js" "%DEST%\public\vendor\washhub\js" >nul
+xcopy /E /I /Y /Q "%SRC%\assets" "%DEST%\public\vendor\washhub\assets" >nul
 
 findstr /C:"washhub.php" "%DEST%\routes\web.php" >nul 2>&1
 if errorlevel 1 (

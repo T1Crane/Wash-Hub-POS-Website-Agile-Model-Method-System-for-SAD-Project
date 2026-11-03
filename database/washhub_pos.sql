@@ -118,19 +118,28 @@ CREATE TABLE IF NOT EXISTS wh_users (
     username      VARCHAR(50)  NOT NULL UNIQUE,
     full_name     VARCHAR(100) NOT NULL,
     password_hash VARCHAR(255) NOT NULL,
-    role          ENUM('owner','admin','cashier', 'staff') NOT NULL DEFAULT 'cashier',
+    role          ENUM('admin','staff') NOT NULL DEFAULT 'staff',
     active        TINYINT(1) NOT NULL DEFAULT 1,
     created_at    DATETIME NOT NULL,
     last_login_at DATETIME NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
--- Starter price list
+-- Starter price list (the shop's paper order form; prices per load / per item)
 INSERT INTO wh_services (name, unit, price, turnaround_hours, is_express, color, sort_order) VALUES
-('Wash-Dry-Fold', 'kg', 35, 24, 0, 'blue', 1),
-('Dry Cleaning', 'pc', 180, 72, 0, 'violet', 2),
-('Ironing / Pressing', 'pc', 20, 24, 0, 'amber', 3),
-('Comforter / Blanket', 'pc', 150, 48, 0, 'teal', 4),
-('Express Add-on (Same Day)', 'flat', 60, 6, 1, 'red', 5);
+('Wash', 'pc', 65, 24, 0, 'blue', 1),
+('Wash & Dry', 'pc', 130, 24, 0, 'blue', 2),
+('Dry', 'pc', 80, 24, 0, 'amber', 3),
+('Dry & Fold', 'pc', 100, 24, 0, 'amber', 4),
+('Wash, Dry, & Fold', 'pc', 150, 24, 0, 'teal', 5),
+('Spin & Dry', 'pc', 100, 24, 0, 'teal', 6),
+('Package A', 'pc', 180, 24, 0, 'violet', 7),
+('Package B', 'pc', 200, 24, 0, 'violet', 8),
+('Package C', 'pc', 220, 24, 0, 'violet', 9),
+('Addt Detergent', 'pc', 15, 24, 0, 'green', 10),
+('Addt Fabcon', 'pc', 15, 24, 0, 'green', 11),
+('Over 8 kilos (Wash & Dry)', 'pc', 40, 24, 0, 'pink', 12),
+('Over 8 kilos (Wash or Dry)', 'pc', 20, 24, 0, 'pink', 13),
+('Blue Plastic', 'pc', 12, 24, 0, 'slate', 14);
 
 -- Starter supplies
 INSERT INTO wh_inventory (name, unit, stock, reorder_level, cost, updated_at) VALUES
@@ -141,5 +150,5 @@ INSERT INTO wh_inventory (name, unit, stock, reorder_level, cost, updated_at) VA
 ('Hangers', 'pcs', 25, 30, 12, NOW()),
 ('Dryer Sheets', 'box', 6, 2, 150, NOW());
 
--- Shop settings and the first Owner account (owner / owner123) are created
+-- Shop settings and the first Owner / Admin account (owner / owner123) are created
 -- automatically the first time the app is opened.

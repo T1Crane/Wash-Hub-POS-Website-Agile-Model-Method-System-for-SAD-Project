@@ -88,7 +88,7 @@ svg.icon { width: 20px; height: 20px; flex: none; stroke: currentColor; fill: no
   position: sticky; top: 0; height: 100vh;
 }
 .brand { display: flex; align-items: center; gap: 10px; padding: 4px 8px 20px; color: #fff; }
-.brand-logo { width: 42px; height: 42px; flex: none; }
+.brand-logo { width: 52px; height: 52px; flex: none; border-radius: 50%; object-fit: contain; }
 .brand-name { font-weight: 800; font-size: 1.15rem; letter-spacing: .2px; }
 .brand-sub { font-size: .75rem; color: var(--nav-ink); }
 .nav { display: flex; flex-direction: column; gap: 4px; }
@@ -408,7 +408,7 @@ table.table { width: 100%; border-collapse: collapse; font-size: .94rem; }
   box-shadow: 0 2px 10px rgba(0,0,0,.12);
 }
 .ticket .t-center { text-align: center; }
-.ticket .t-logo { width: 46px; height: 46px; margin: 0 auto 4px; display: block; }
+.ticket .t-logo { width: 84px; height: 84px; margin: 0 auto 4px; display: block; border-radius: 50%; object-fit: contain; }
 .ticket .t-shop { font-size: 17px; font-weight: 800; letter-spacing: .3px; }
 .ticket .t-title { margin: 8px 0 4px; font-weight: 800; letter-spacing: 2px; font-size: 11px; border-top: 1px dashed #000; border-bottom: 1px dashed #000; padding: 4px 0; text-align: center; }
 .ticket .t-code { font-family: ui-monospace, Consolas, monospace; font-size: 20px; font-weight: 800; text-align: center; letter-spacing: 1px; margin: 6px 0; }
@@ -483,7 +483,7 @@ table.table { width: 100%; border-collapse: collapse; font-size: .94rem; }
 /* ---------- 9) Login screen ---------- */
 .login-wrap { min-height: 100vh; display: grid; place-items: center; padding: 16px; background: var(--nav-bg); }
 .login-card { width: 100%; max-width: 400px; background: var(--surface); border-radius: 18px; padding: 28px; box-shadow: var(--shadow-lg); }
-.login-card .brand-logo { width: 56px; height: 56px; display: block; margin: 0 auto 10px; }
+.login-card .brand-logo { width: 140px; height: 140px; display: block; margin: 0 auto 10px; }
 .login-card h1 { text-align: center; font-size: 1.4rem; }
 .login-card .sub { text-align: center; color: var(--muted); margin: 4px 0 20px; }
 .login-error { background: var(--danger-soft); color: var(--danger); border-radius: 10px; padding: 10px 12px; font-weight: 600; margin-bottom: 12px; }

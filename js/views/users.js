@@ -1,5 +1,5 @@
 /* ==========================================================================
-   views/users.js — User accounts (Owner only)
+   views/users.js — User accounts (Owner / Admin only)
    --------------------------------------------------------------------------
    - List of every account: name, username, role, active/disabled, last login
    - Add a user, or click a row to edit: name, username, role, active,
@@ -23,7 +23,7 @@
           <label class="field">Username *<input type="text" name="username" maxlength="50" autocomplete="off" value="${h(u.username)}" placeholder="e.g. maria or maria@email.com"></label>
           <label class="field">Role *
             <select name="role" ${isMe ? 'disabled' : ''}>
-              ${Object.keys(WH.ROLES).map((r) => `<option value="${r}" ${(u.role || 'cashier') === r ? 'selected' : ''}>${WH.roleLabel(r)}</option>`).join('')}
+              ${Object.keys(WH.ROLES).map((r) => `<option value="${r}" ${(u.role || 'staff') === r ? 'selected' : ''}>${WH.roleLabel(r)}</option>`).join('')}
             </select>
           </label>
           <p class="small muted span-2" data-role="about" style="margin:-4px 0 0"></p>
@@ -33,7 +33,7 @@
             <input type="checkbox" name="active" ${u.active === false ? '' : 'checked'} ${isMe ? 'disabled' : ''} style="width:22px;height:22px">
             Account active (untick to block this person from logging in)
           </label>
-          ${isMe ? '<p class="small muted span-2" style="margin:0">This is your own account: your role and status can\'t be changed here, so the shop is never left without an owner.</p>' : ''}
+          ${isMe ? '<p class="small muted span-2" style="margin:0">This is your own account: your role and status can\'t be changed here, so the shop is never left without an Owner / Admin.</p>' : ''}
         </div>`,
       foot: `
         ${u.id && !isMe ? `<button class="btn btn-danger" data-act="delete">${WH.icon('trash')} Delete account</button><span class="spacer"></span>` : ''}
@@ -86,7 +86,7 @@
   WH.views.users = (view) => {
     view.innerHTML = `
       <div class="toolbar">
-        <div class="muted">Only the Owner can see this page.</div>
+        <div class="muted">Only Owner / Admin accounts can see this page.</div>
         <span class="spacer"></span>
         <button class="btn btn-primary" id="u-add">${WH.icon('plus')} Add user</button>
       </div>

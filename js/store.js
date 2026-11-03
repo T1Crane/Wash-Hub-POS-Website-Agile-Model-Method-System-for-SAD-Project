@@ -74,11 +74,11 @@
   const payStatus = (paid, total) => (paid <= 0 && total > 0 ? 'unpaid' : paid + 0.001 >= total ? 'paid' : 'partial');
 
   const DEFAULT_SETTINGS = {
-    shop_name: 'Wash Hub',
+    shop_name: 'Gap Wash Hub',
     shop_tagline: 'Laundry Services',
     shop_address: 'Shop address, City',
     shop_phone: '0900 000 0000',
-    pickup_terms: 'Present this claim ticket when picking up. Items unclaimed after 30 days will be donated. Wash Hub is not liable for color bleeding, shrinkage, or items left in pockets. Please check your items before leaving the counter.',
+    pickup_terms: 'Present this claim ticket when picking up. Items unclaimed after 30 days will be donated. Gap Wash Hub is not liable for color bleeding, shrinkage, or items left in pockets. Please check your items before leaving the counter.',
     sms_template: 'Hi {name}! Your laundry ({code}) at {shop} is ready for pickup. Balance due: {balance}. Thank you!',
     public_url: '',
   };
@@ -95,6 +95,8 @@
         if (raw) this.db = JSON.parse(raw);
       } catch (e) { /* storage blocked: keep in memory only */ }
       if (!this.db) this.db = this.seed();
+      // Rebrand saved demo data from before the name change (only if the name was never edited)
+      if (this.db.settings && this.db.settings.shop_name === 'Wash Hub') this.db.settings.shop_name = DEFAULT_SETTINGS.shop_name;
       return this.db;
     },
     save() {
@@ -116,12 +118,22 @@
         inventory: [],
         invLogs: [],
       };
+      // Same price list as WashHubApi::DEFAULT_SERVICES (the shop's paper order form, per load / per item)
       [
-        ['Wash-Dry-Fold', 'kg', 35, 24, false, 'blue'],
-        ['Dry Cleaning', 'pc', 180, 72, false, 'violet'],
-        ['Ironing / Pressing', 'pc', 20, 24, false, 'amber'],
-        ['Comforter / Blanket', 'pc', 150, 48, false, 'teal'],
-        ['Express Add-on (Same Day)', 'flat', 60, 6, true, 'red'],
+        ['Wash', 'pc', 65, 24, false, 'blue'],
+        ['Wash & Dry', 'pc', 130, 24, false, 'blue'],
+        ['Dry', 'pc', 80, 24, false, 'amber'],
+        ['Dry & Fold', 'pc', 100, 24, false, 'amber'],
+        ['Wash, Dry, & Fold', 'pc', 150, 24, false, 'teal'],
+        ['Spin & Dry', 'pc', 100, 24, false, 'teal'],
+        ['Package A', 'pc', 180, 24, false, 'violet'],
+        ['Package B', 'pc', 200, 24, false, 'violet'],
+        ['Package C', 'pc', 220, 24, false, 'violet'],
+        ['Addt Detergent', 'pc', 15, 24, false, 'green'],
+        ['Addt Fabcon', 'pc', 15, 24, false, 'green'],
+        ['Over 8 kilos (Wash & Dry)', 'pc', 40, 24, false, 'pink'],
+        ['Over 8 kilos (Wash or Dry)', 'pc', 20, 24, false, 'pink'],
+        ['Blue Plastic', 'pc', 12, 24, false, 'slate'],
       ].forEach(([name, unit, price, turnaround_hours, is_express, color], i) =>
         this.db.services.push({ id: this.nextId('services'), name, unit, price, turnaround_hours, is_express, color, active: true, sort_order: i + 1 }));
       const now = new Date().toISOString();
@@ -131,15 +143,16 @@
       ].forEach(([name, unit, stock, reorder_level, cost]) =>
         this.db.inventory.push({ id: this.nextId('inventory'), name, unit, stock, reorder_level, cost, updated_at: now }));
 
-      // Sample orders: [customer, phone, items, hours ago, status, paid?]
+      // Sample orders: [customer, phone, items [service id, qty], hours ago, status, paid?]
+      // (service ids follow the list above: 1 Wash, 2 Wash & Dry, 5 Wash Dry & Fold, 7 Package A, 10 Detergent, 14 Blue Plastic...)
       const samples = [
-        ['Maria Santos', '09171234567', [[1, 6.5], [3, 4]], 30, 'completed', 'full'],
-        ['Juan Dela Cruz', '09181112222', [[1, 4.2]], 26, 'ready', 'none'],
-        ['Ana Reyes', '09209876543', [[2, 3]], 20, 'washing', 'full'],
-        ['Carlo Mendoza', '09175550000', [[1, 8], [3, 5]], 28, 'drying', 'half'],
-        ['Rosa Villanueva', '09061239876', [[4, 2]], 5, 'washing', 'none'],
-        ['Liza Garcia', '09998887777', [[1, 3.5], [5, 1]], 2, 'received', 'full'],
-        ['Maria Santos', '09171234567', [[1, 5]], 1, 'received', 'none'],
+        ['Maria Santos', '09171234567', [[5, 2], [14, 2]], 30, 'completed', 'full'],
+        ['Juan Dela Cruz', '09181112222', [[2, 1]], 26, 'ready', 'none'],
+        ['Ana Reyes', '09209876543', [[7, 1]], 20, 'washing', 'full'],
+        ['Carlo Mendoza', '09175550000', [[5, 1], [12, 1], [10, 1]], 28, 'drying', 'half'],
+        ['Rosa Villanueva', '09061239876', [[1, 2]], 5, 'washing', 'none'],
+        ['Liza Garcia', '09998887777', [[8, 1], [11, 1]], 2, 'received', 'full'],
+        ['Maria Santos', '09171234567', [[5, 1]], 1, 'received', 'none'],
       ];
       samples.forEach(([name, phone, items, hoursAgo, status, pay]) => {
         const at = new Date(Date.now() - hoursAgo * 3600000);
@@ -152,7 +165,7 @@
       for (let d = 1; d <= 6; d++) {
         const at = new Date(Date.now() - d * 86400000);
         at.setHours(11, 0, 0, 0);
-        const o = this.createOrder({ customer: walkIn, items: [{ service_id: 1, qty: 4 + ((d * 7) % 9) }], payment: { amount: 0 } }, at);
+        const o = this.createOrder({ customer: walkIn, items: [{ service_id: 5, qty: 1 + ((d * 7) % 4) }], payment: { amount: 0 } }, at);
         walkIn = { id: o.customer.id };
         this.addPayment({ id: o.id, amount: o.total, method: d % 3 ? 'cash' : 'gcash' }, at);
         this.setStatus({ id: o.id, status: 'completed' }, new Date(at.getTime() + 86400000));
