@@ -48,11 +48,33 @@
           <tbody>${orders.map((o) => `<tr class="clickable" data-open="${o.id}"><td class="strong">${h(o.code)}</td><td>${WH.fmtDate(o.created_at)}</td>
             <td class="small">${h(WH.itemsSummary(o.items))}</td><td class="right num">${WH.money(o.total)}</td><td>${WH.payPill(o)}</td><td>${WH.statusPill(o)}</td></tr>`).join('')}</tbody></table></div>`
           : '<div class="empty">No orders yet.</div>'}`,
-      foot: `<button class="btn" data-act="edit">${WH.icon('edit')} Edit</button><button class="btn btn-primary" data-act="order">${WH.icon('plus')} New order</button>`,
+      foot: `
+        ${WH.can('customer_delete') ? `<button class="btn btn-danger" data-act="delete">${WH.icon('trash')} Delete customer</button><span class="spacer"></span>` : ''}
+        <button class="btn" data-act="edit">${WH.icon('edit')} Edit</button><button class="btn btn-primary" data-act="order">${WH.icon('plus')} New order</button>`,
     });
     WH.bindOrderCards(m.el, orders);
     m.el.querySelector('[data-act="edit"]').onclick = async () => { m.close(); if (await WH.editCustomer(c)) reload(); };
     m.el.querySelector('[data-act="order"]').onclick = () => { m.close(); WH.startOrderFor({ id: c.id, name: c.name, phone: c.phone, address: c.address, notes: c.notes }); };
+
+    // Owner / Admin: delete the customer AND all their orders (asks first, warns about unfinished orders)
+    const del = m.el.querySelector('[data-act="delete"]');
+    if (del) del.onclick = async () => {
+      const unfinished = orders.filter((o) => o.status !== 'completed').length;
+      const paid = orders.reduce((s, o) => s + o.amount_paid, 0);
+      const ok = await WH.confirm(`Delete ${c.name}?`,
+        `This permanently deletes <b>${h(c.name)}</b> and <b>all ${orders.length} order${orders.length === 1 ? '' : 's'}</b> in their history${paid > 0 ? `, including ${WH.money(paid)} in payments (Reports will change)` : ''}.
+         ${unfinished ? `<br><br><b style="color:var(--danger)">${unfinished} of these orders are not finished yet</b> — make sure the laundry was returned first.` : ''}
+         <br><br>This cannot be undone.`,
+        'Delete permanently');
+      if (!ok) return;
+      try {
+        const r = await WH.api('customer_delete', { id: c.id });
+        m.close();
+        WH.toast(`${r.deleted} and ${r.orders} order${r.orders === 1 ? '' : 's'} deleted`, 'success');
+        reload();
+        WH.updateBadges();
+      } catch (e) { WH.error(e); }
+    };
   };
 
   WH.views = WH.views || {};

@@ -4,6 +4,7 @@
    - Stock list with low-stock warning (stock <= reorder level)
    - Restock (+) / Use (−) adjustments, each saved to a movement log
    - Add / edit items
+   - Owner / Admin: delete items no longer used, clear the movement log
    ========================================================================== */
 (function (WH) {
   'use strict';
@@ -23,7 +24,8 @@
         <button class="btn btn-primary" id="inv-add">${WH.icon('plus')} Add item</button>
       </div>
       <div id="inv-body"><div class="loading">Loading…</div></div>
-      <h2 style="margin:24px 0 10px">Recent stock movements</h2>
+      <div class="row" style="margin:24px 0 10px"><h2 style="flex:1">Recent stock movements</h2>
+        ${WH.can('inventory_logs_clear') ? `<button class="btn btn-sm btn-danger" id="inv-clear">${WH.icon('trash')} Clear history</button>` : ''}</div>
       <div id="inv-logs"></div>`;
 
     let items = [];
@@ -56,6 +58,7 @@
                 <button class="btn btn-sm" data-adj="in" data-id="${i.id}">${WH.icon('plus')} Restock</button>
                 <button class="btn btn-sm" data-adj="out" data-id="${i.id}">${WH.icon('minus')} Use</button>
                 <button class="btn btn-sm btn-ghost btn-icon" data-edit="${i.id}" aria-label="Edit">${WH.icon('edit')}</button>
+                ${WH.can('inventory_delete') ? `<button class="btn btn-sm btn-ghost btn-icon" data-del="${i.id}" aria-label="Delete" title="Delete item" style="color:var(--danger)">${WH.icon('trash')}</button>` : ''}
               </div></td></tr>`;
           }).join('')}</tbody></table></div>`
         : `<div class="card empty">${WH.icon('box')}<div>No supplies yet.</div></div>`;
@@ -69,6 +72,22 @@
 
       view.querySelectorAll('[data-adj]').forEach((b) => b.addEventListener('click', () => adjust(items.find((i) => i.id === Number(b.dataset.id)), b.dataset.adj)));
       view.querySelectorAll('[data-edit]').forEach((b) => b.addEventListener('click', () => edit(items.find((i) => i.id === Number(b.dataset.edit)))));
+      view.querySelectorAll('[data-del]').forEach((b) => b.addEventListener('click', () => remove(items.find((i) => i.id === Number(b.dataset.del)))));
+    };
+
+    // Owner / Admin: delete a supply item that isn't used anymore (asks first)
+    const remove = async (item) => {
+      const ok = await WH.confirm(`Delete ${item.name}?`,
+        `This removes the item from Inventory, along with its stock movement records. It can't be undone.`
+        + (item.stock > 0 ? `<br><br><b>It still has ${WH.num(item.stock)} ${h(item.unit)} in stock.</b>` : ''),
+        'Delete item');
+      if (!ok) return;
+      try {
+        await WH.api('inventory_delete', { id: item.id });
+        WH.toast(`${item.name} deleted`, 'success');
+        load();
+        WH.updateBadges();
+      } catch (e) { WH.error(e); }
     };
 
     const adjust = (item, dir) => {
@@ -119,6 +138,20 @@
     };
 
     view.querySelector('#inv-add').onclick = () => edit();
+
+    // Owner / Admin: clear the movement log (stock numbers stay the same)
+    const clearBtn = view.querySelector('#inv-clear');
+    if (clearBtn) clearBtn.onclick = async () => {
+      const ok = await WH.confirm('Clear stock movement history?',
+        'Every restock / use record in this list will be deleted permanently. <b>Current stock levels do not change.</b>',
+        'Clear history');
+      if (!ok) return;
+      try {
+        const r = await WH.api('inventory_logs_clear');
+        WH.toast(`${r.deleted} stock movement${r.deleted === 1 ? '' : 's'} cleared`, 'success');
+        load();
+      } catch (e) { WH.error(e); }
+    };
     load();
     return { refresh: load };
   };

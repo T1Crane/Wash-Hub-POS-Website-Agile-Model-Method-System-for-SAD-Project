@@ -22,9 +22,10 @@ A touch-friendly front-desk system for a laundry shop: take orders, print claim 
 | **My Account** (everyone) | Click your name in the sidebar: edit your name and username, change your password (needs the current one). |
 | **Dashboard** | Today's and last-7-days sales, a 7-day sales chart, active/in-progress counts per stage, overdue orders, orders ready for pickup (with "Notify" SMS text), uncollected balances and low-stock alerts. |
 | **Customers** | Profiles with order history and totals. "New order" pre-fills the POS. |
-| **Inventory** | Supplies (detergent, fabric conditioner, bags, hangers…), stock level meter, reorder level, restock/use adjustments with a movement log. |
+| **Inventory** | Supplies (detergent, fabric conditioner, bags, hangers…), stock level meter, reorder level, restock/use adjustments with a movement log. Owner / Admin can **delete** items that aren't used anymore (the trash button on the row). |
 | **Reports** | Any date range: amount collected vs billed, orders, kg processed, revenue per service, payment methods. Print or export to CSV. |
-| **Settings** | Shop details printed on tickets, pickup terms, SMS template, price list (price, unit, turnaround hours, express flag, tile color, on/off). |
+| **Settings** | Shop details printed on tickets, pickup terms, SMS template, price list (add, edit, switch off or **delete** services: price, unit, turnaround hours, express flag, tile color). |
+| **History cleanup** (Owner / Admin) | **Settings → History cleanup:** delete finished orders between two dates (checks the count first). **Customers:** delete a customer with all their orders. **Inventory:** clear the stock movement log (stock levels stay). |
 
 ---
 
@@ -149,7 +150,7 @@ laravel/               Files that make it run inside Laravel (+ install script)
 - **No login needed:** `ping`, `login`, `logout`, `me`, `track` (QR page, needs the order's secret code)
 - **Everyone logged in:** `bootstrap` (also returns the user's permission list), `account_save`, `orders`, `order`, `order_status`
 - **Both sides (Owner / Admin and Staff):** `order_delete`, `order_create`, `order_payment`, `order_notify`, `customers`, `customer_save`
-- **Owner / Admin only:** `dashboard`, `report`, `inventory`, `inventory_save`, `inventory_adjust`, `inventory_logs`, `service_save`, `settings_save`, `users`, `user_save`, `user_delete`
+- **Owner / Admin only:** `dashboard`, `report`, `inventory`, `inventory_save`, `inventory_adjust`, `inventory_logs`, `inventory_delete`, `service_save`, `service_delete`, `settings_save`, `users`, `user_save`, `user_delete`, `history_delete`, `customer_delete`, `inventory_logs_clear`
 
 The full list lives in `WashHubApi::PERMISSIONS`. An action not on the list is refused for everyone ("default deny"). Not logged in → HTTP 401; logged in but not allowed → 403.
 

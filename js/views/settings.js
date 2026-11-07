@@ -46,12 +46,27 @@
 
         <div class="card">
           <div class="card-head"><h2>Services & prices</h2><button class="btn btn-sm" id="svc-add">${WH.icon('plus')} Add service</button></div>
-          <p class="small muted" style="margin-top:-6px">Express add-ons replace the turnaround time of the whole order (e.g. 6 hours = same day). Turn a service off instead of deleting it so old tickets stay correct.</p>
+          <p class="small muted" style="margin-top:-6px">Express add-ons replace the turnaround time of the whole order (e.g. 6 hours = same day). Untick <b>Active</b> to hide a service for a while, or <b>Delete</b> to remove it for good. Old orders and tickets keep their prices either way.</p>
           <div class="table-wrap"><table class="table" id="svc-table">
             <thead><tr><th>Name</th><th>Unit</th><th>Price (₱)</th><th>Turnaround (h)</th><th>Express</th><th>Color</th><th>Active</th><th></th></tr></thead>
             <tbody></tbody>
           </table></div>
         </div>
+
+        ${WH.can('history_delete') ? `
+        <div class="card" id="hist-card">
+          <div class="card-head"><h2>${WH.icon('trash')} History cleanup</h2><span class="small muted">Owner / Admin only</span></div>
+          <p class="small muted" style="margin-top:-6px">Delete <b>finished</b> orders (Picked Up / Delivered) received between two dates, with their payments.
+            Orders still in progress are never deleted here. Those sales also disappear from Reports, so export a CSV in Reports first if you need a record.</p>
+          <div class="row wrap" style="align-items:flex-end">
+            <label class="field" style="width:180px">From<input type="date" name="from"></label>
+            <label class="field" style="width:180px">To<input type="date" name="to" value="${WH.ymd(new Date())}"></label>
+            <button class="btn" id="hist-check">${WH.icon('search')} Check</button>
+            <button class="btn btn-danger" id="hist-delete" disabled>${WH.icon('trash')} Delete finished orders</button>
+          </div>
+          <div id="hist-result" class="small" style="margin-top:10px"></div>
+          <p class="small muted" style="margin:14px 0 0">To delete one customer and all their orders, open them in <b>Customers</b>. To clear the stock movement log, use <b>Inventory</b>.</p>
+        </div>` : ''}
 
         <div class="card">
           <div class="card-head"><h2>Data storage</h2></div>
@@ -84,31 +99,91 @@
         <td><input type="checkbox" name="is_express" ${svc.is_express ? 'checked' : ''} style="width:22px;height:22px"></td>
         <td><select name="color">${COLORS.map((c) => `<option ${svc.color === c ? 'selected' : ''}>${c}</option>`).join('')}</select></td>
         <td><input type="checkbox" name="active" ${svc.active ? 'checked' : ''} style="width:22px;height:22px"></td>
-        <td><button class="btn btn-sm btn-primary" data-save>Save</button></td>
+        <td><div class="row" style="flex-wrap:nowrap">
+          <button class="btn btn-sm btn-primary" data-save>Save</button>
+          <button class="btn btn-sm btn-danger btn-icon" data-delete title="Delete service" aria-label="Delete service">${WH.icon('trash')}</button>
+        </div></td>
       </tr>`;
     const tbody = view.querySelector('#svc-table tbody');
     const renderServices = () => {
       tbody.innerHTML = WH.state.services.map(row).join('');
       bindRows();
     };
-    const bindRows = () => tbody.querySelectorAll('[data-save]').forEach((b) => {
-      b.onclick = async () => {
-        const tr = b.closest('tr');
-        const data = WH.formData(tr);
-        const index = Array.from(tbody.children).indexOf(tr);
-        try {
-          WH.state.services = await WH.api('service_save', { ...data, id: Number(tr.dataset.id) || 0, sort_order: index + 1 });
-          WH.toast('Service saved', 'success');
-          renderServices();
-        } catch (e) { WH.error(e); }
-      };
-    });
+    const bindRows = () => {
+      tbody.querySelectorAll('[data-save]').forEach((b) => {
+        b.onclick = async () => {
+          const tr = b.closest('tr');
+          const data = WH.formData(tr);
+          const index = Array.from(tbody.children).indexOf(tr);
+          try {
+            WH.state.services = await WH.api('service_save', { ...data, id: Number(tr.dataset.id) || 0, sort_order: index + 1 });
+            WH.toast('Service saved', 'success');
+            renderServices();
+          } catch (e) { WH.error(e); }
+        };
+      });
+      // Delete: a row that was never saved is just removed; a saved one is deleted on the server after asking
+      tbody.querySelectorAll('[data-delete]').forEach((b) => {
+        b.onclick = async () => {
+          const tr = b.closest('tr');
+          const id = Number(tr.dataset.id) || 0;
+          if (!id) { tr.remove(); return; }
+          const name = tr.querySelector('[name="name"]').value;
+          const ok = await WH.confirm('Delete this service?',
+            `<b>${h(name)}</b> will be removed from the price list and the New Order screen. Past orders and tickets keep their prices.<br><br>Tip: to hide it only for a while, untick <b>Active</b> instead.`,
+            'Delete service');
+          if (!ok) return;
+          try {
+            WH.state.services = await WH.api('service_delete', { id });
+            WH.toast(`${name} was deleted`, 'success');
+            renderServices();
+          } catch (e) { WH.error(e); }
+        };
+      });
+    };
     view.querySelector('#svc-add').onclick = () => {
       tbody.insertAdjacentHTML('beforeend', row({ name: '', unit: 'pc', price: 0, turnaround_hours: 24, is_express: false, color: 'green', active: true }));
       bindRows();
       tbody.lastElementChild.querySelector('input').focus();
     };
     renderServices();
+
+    // ----- history cleanup: first "Check" (count only), then "Delete" (asks once more) -----
+    const hist = view.querySelector('#hist-card');
+    if (hist) {
+      const result = hist.querySelector('#hist-result');
+      const delBtn = hist.querySelector('#hist-delete');
+      let checked = null; // the range that was last checked
+      const range = () => ({ from: hist.querySelector('[name="from"]').value, to: hist.querySelector('[name="to"]').value });
+      hist.querySelectorAll('input').forEach((i) => i.addEventListener('change', () => { checked = null; delBtn.disabled = true; result.innerHTML = ''; }));
+
+      hist.querySelector('#hist-check').onclick = async () => {
+        try {
+          checked = await WH.api('history_delete', range()); // without confirm = count only
+          result.innerHTML = checked.count
+            ? `<b>${checked.count}</b> finished order${checked.count === 1 ? '' : 's'} from ${WH.fmtDate(checked.from + 'T12:00:00')} to ${WH.fmtDate(checked.to + 'T12:00:00')} · billed ${WH.money(checked.billed)} · paid ${WH.money(checked.paid)}`
+            : 'No finished orders in these dates.';
+          delBtn.disabled = !checked.count;
+        } catch (e) { WH.error(e); }
+      };
+
+      delBtn.onclick = async () => {
+        if (!checked || !checked.count) return;
+        const ok = await WH.confirm(`Delete ${checked.count} finished order${checked.count === 1 ? '' : 's'}?`,
+          `All finished orders from <b>${WH.fmtDate(checked.from + 'T12:00:00')}</b> to <b>${WH.fmtDate(checked.to + 'T12:00:00')}</b> will be deleted permanently,
+           with their payments (<b>${WH.money(checked.paid)}</b>). Reports for these dates will change. This cannot be undone.`,
+          'Delete permanently');
+        if (!ok) return;
+        try {
+          const r = await WH.api('history_delete', { from: checked.from, to: checked.to, confirm: true });
+          WH.toast(`${r.count} finished order${r.count === 1 ? '' : 's'} deleted`, 'success');
+          checked = null;
+          delBtn.disabled = true;
+          result.innerHTML = '';
+          WH.updateBadges();
+        } catch (e) { WH.error(e); }
+      };
+    }
 
     // ----- demo data tools -----
     if (local) {

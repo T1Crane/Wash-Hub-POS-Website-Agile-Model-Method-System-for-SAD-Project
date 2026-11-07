@@ -70,11 +70,17 @@ class WashHubApi
         'inventory_logs'   => ['admin'],
         'inventory_save'   => ['admin'],
         'inventory_adjust' => ['admin'],
-        'service_save'     => ['admin'],
+        'inventory_delete' => ['admin'],  // remove a supply item that's no longer used
+        'service_save'    => ['admin'],
+        'service_delete'   => ['admin'],
         'settings_save'    => ['admin'],
         'users'            => ['admin'],
         'user_save'        => ['admin'],
         'user_delete'      => ['admin'],
+        // Owner / Admin only: deleting history
+        'history_delete'       => ['admin'],  // finished orders in a date range
+        'customer_delete'      => ['admin'],  // a customer + all their orders
+        'inventory_logs_clear' => ['admin'],  // the stock movement log
     ];
 
     /** True if this role may run this action. $role = null means nobody is logged in. */
@@ -160,9 +166,14 @@ class WashHubApi
             // --- settings & price list ---
             case 'settings_save':    return $this->saveSettings($in);
             case 'service_save':     return $this->saveService($in);
+            case 'service_delete':   return $this->deleteService((int) ($in['id'] ?? 0));
             // --- customers ---
             case 'customers':        return $this->customers($in);
             case 'customer_save':    return $this->saveCustomer($in);
+            case 'customer_delete':  return $this->deleteCustomer((int) ($in['id'] ?? 0));
+            // --- deleting history ---
+            case 'history_delete':       return $this->deleteHistory($in);
+            case 'inventory_logs_clear': return $this->clearInventoryLogs();
             // --- orders / POS ---
             case 'orders':           return $this->orders($in);
             case 'order':            return $this->order((int) ($in['id'] ?? 0));
@@ -179,6 +190,7 @@ class WashHubApi
             case 'inventory_save':   return $this->saveInventoryItem($in);
             case 'inventory_adjust': return $this->adjustInventory($in);
             case 'inventory_logs':   return $this->inventoryLogs($in);
+            case 'inventory_delete': return $this->deleteInventoryItem((int) ($in['id'] ?? 0));
         }
         throw new InvalidArgumentException("Unknown action \"$action\".");
     }
@@ -669,6 +681,20 @@ class WashHubApi
         } else {
             $this->db->prepare('INSERT INTO wh_services (name, unit, price, turnaround_hours, is_express, color, active, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
                 ->execute($data);
+        }
+        return $this->services();
+    }
+
+    /**
+     * Owner / Admin: remove a service from the price list for good. Payload {id}.
+     * Past orders are not affected: each order line keeps its own copy of the name and price.
+     */
+    private function deleteService(int $id): array
+    {
+        $stmt = $this->db->prepare('DELETE FROM wh_services WHERE id = ?');
+        $stmt->execute([$id]);
+        if ($stmt->rowCount() === 0) {
+            throw new InvalidArgumentException('Service not found.');
         }
         return $this->services();
     }
@@ -1296,6 +1322,20 @@ class WashHubApi
         return $this->inventory();
     }
 
+    /**
+     * Delete a supply item the shop no longer uses.
+     * Its stock movement records are removed too (ON DELETE CASCADE on wh_inventory_logs).
+     */
+    private function deleteInventoryItem(int $id): array
+    {
+        $stmt = $this->db->prepare('DELETE FROM wh_inventory WHERE id = ?');
+        $stmt->execute([$id]);
+        if ($stmt->rowCount() === 0) {
+            throw new InvalidArgumentException('Item not found.');
+        }
+        return $this->inventory();
+    }
+
     /** Latest stock movements (optionally for one item). */
     private function inventoryLogs(array $in): array
     {
@@ -1311,6 +1351,72 @@ class WashHubApi
             'reason'     => $r['reason'],
             'created_at' => $this->iso($r['created_at']),
         ], $stmt->fetchAll(PDO::FETCH_ASSOC));
+    }
+
+    // =====================================================================
+    //  DELETING HISTORY (Owner / Admin only)
+    //  Deleting an order also deletes its items, payments and status history
+    //  (ON DELETE CASCADE), so those sales leave the reports too.
+    // =====================================================================
+
+    /**
+     * Delete FINISHED orders (Picked Up / Delivered) received between two dates.
+     * Payload {from, to} as YYYY-MM-DD, plus confirm: true to really delete.
+     * Without confirm it only counts them, so the screen can show "12 orders, P1,560" first.
+     * Orders that are not finished yet are never deleted here.
+     */
+    private function deleteHistory(array $in): array
+    {
+        $from = $this->validDate($in['from'] ?? '');
+        $to   = $this->validDate($in['to'] ?? '');
+        if (!$from || !$to) {
+            throw new InvalidArgumentException('Choose a start date and an end date.');
+        }
+        if ($from > $to) {
+            [$from, $to] = [$to, $from];
+        }
+        $where  = "status = 'completed' AND created_at >= ? AND created_at < ?";
+        $params = [$this->dayStart($from), $this->dayStart($to, 1)];
+
+        $stmt = $this->db->prepare("SELECT COUNT(*) AS n, COALESCE(SUM(total), 0) AS billed, COALESCE(SUM(amount_paid), 0) AS paid FROM wh_orders WHERE $where");
+        $stmt->execute($params);
+        $sum = $stmt->fetch(PDO::FETCH_ASSOC);
+        $result = ['from' => $from, 'to' => $to, 'count' => (int) $sum['n'], 'billed' => (float) $sum['billed'], 'paid' => (float) $sum['paid'], 'deleted' => false];
+
+        if (!empty($in['confirm']) && $result['count'] > 0) {
+            $this->db->prepare("DELETE FROM wh_orders WHERE $where")->execute($params);
+            $result['deleted'] = true;
+        }
+        return $result;
+    }
+
+    /** Delete a customer profile together with ALL of that customer's orders. Payload {id}. */
+    private function deleteCustomer(int $id): array
+    {
+        $stmt = $this->db->prepare('SELECT name FROM wh_customers WHERE id = ?');
+        $stmt->execute([$id]);
+        $name = $stmt->fetchColumn();
+        if ($name === false) {
+            throw new InvalidArgumentException('Customer not found.');
+        }
+        $this->db->beginTransaction();
+        try {
+            $stmt = $this->db->prepare('DELETE FROM wh_orders WHERE customer_id = ?');  // orders first (they point to the customer)
+            $stmt->execute([$id]);
+            $orders = $stmt->rowCount();
+            $this->db->prepare('DELETE FROM wh_customers WHERE id = ?')->execute([$id]);
+            $this->db->commit();
+        } catch (Throwable $e) {
+            $this->db->rollBack();
+            throw $e;
+        }
+        return ['deleted' => $name, 'orders' => $orders];
+    }
+
+    /** Clear the inventory "Recent stock movements" log. Current stock levels are NOT changed. */
+    private function clearInventoryLogs(): array
+    {
+        return ['deleted' => (int) $this->db->exec('DELETE FROM wh_inventory_logs')];
     }
 
     // =====================================================================

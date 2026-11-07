@@ -219,6 +219,40 @@
         inventory_save: () => this.saveInventory(p),
         inventory_adjust: () => this.adjustInventory(p),
         inventory_logs: () => this.inventoryLogs(p),
+        // delete a supply item + its movement records (same as the MySQL cascade)
+        inventory_delete: () => {
+          const id = Number(p.id);
+          if (!this.db.inventory.some((i) => i.id === id)) fail('Item not found.');
+          this.db.inventory = this.db.inventory.filter((i) => i.id !== id);
+          this.db.invLogs = this.db.invLogs.filter((l) => l.item_id !== id);
+          return this.inventory();
+        },
+        // --- deleting (same rules as WashHubApi) ---
+        service_delete: () => {
+          const before = this.db.services.length;
+          this.db.services = this.db.services.filter((s) => s.id !== Number(p.id));
+          if (this.db.services.length === before) fail('Service not found.');
+          return this.services();
+        },
+        customer_delete: () => {
+          const c = this.db.customers.find((x) => x.id === Number(p.id)) || fail('Customer not found.');
+          const orders = this.db.orders.filter((o) => o.customer_id === c.id).length;
+          this.db.orders = this.db.orders.filter((o) => o.customer_id !== c.id);
+          this.db.customers = this.db.customers.filter((x) => x !== c);
+          return { deleted: c.name, orders };
+        },
+        history_delete: () => {
+          const re = /^\d{4}-\d{2}-\d{2}$/;
+          if (!re.test(p.from || '') || !re.test(p.to || '')) fail('Choose a start date and an end date.');
+          let [from, to] = [p.from, p.to];
+          if (from > to) [from, to] = [to, from];
+          const hit = (o) => o.status === 'completed' && new Date(o.created_at) >= dayStart(from) && new Date(o.created_at) < dayStart(to, 1);
+          const list = this.db.orders.filter(hit);
+          const out = { from, to, count: list.length, billed: r2(list.reduce((s, o) => s + o.total, 0)), paid: r2(list.reduce((s, o) => s + o.amount_paid, 0)), deleted: false };
+          if (p.confirm && list.length) { this.db.orders = this.db.orders.filter((o) => !hit(o)); out.deleted = true; }
+          return out;
+        },
+        inventory_logs_clear: () => { const n = this.db.invLogs.length; this.db.invLogs = []; return { deleted: n }; },
         local_reset: () => { this.db = null; localStorage.removeItem(KEY); this.load(); return true; },
         local_export: () => clone(this.db),
       }[action];
