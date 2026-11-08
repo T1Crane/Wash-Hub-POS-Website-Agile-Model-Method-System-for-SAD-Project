@@ -91,7 +91,17 @@ svg.icon { width: 20px; height: 20px; flex: none; stroke: currentColor; fill: no
 .brand-logo { width: 52px; height: 52px; flex: none; border-radius: 50%; object-fit: contain; }
 .brand-name { font-weight: 800; font-size: 1.15rem; letter-spacing: .2px; }
 .brand-sub { font-size: .75rem; color: var(--nav-ink); }
-.nav { display: flex; flex-direction: column; gap: 4px; }
+/* The menu fills the space between the logo and the user box. If there are more
+   pages than fit the screen height, only the menu scrolls (logo and Log out stay put). */
+.brand, .sidebar-foot { flex: none; }
+.nav { display: flex; flex-direction: column; gap: 4px; flex: 1 1 auto; min-height: 0; overflow-y: auto; scrollbar-width: thin; scrollbar-color: rgba(255,255,255,.25) transparent; }
+/* Shorter screens (laptops, tablets in landscape): slightly smaller rows so the whole menu fits */
+@media (max-height: 860px) {
+  .brand { padding-bottom: 10px; }
+  .nav { gap: 2px; }
+  .nav a { min-height: 40px; }
+  .sidebar-foot { padding-top: 8px; }
+}
 .nav a {
   display: flex; align-items: center; gap: 12px;
   min-height: var(--touch); padding: 0 14px;
@@ -491,7 +501,7 @@ table.table { width: 100%; border-collapse: collapse; font-size: .94rem; }
     flex-direction: row; padding: 6px; overflow-x: auto;
   }
   .brand, .sidebar-foot { display: none; }
-  .nav { flex-direction: row; gap: 2px; width: 100%; }
+  .nav { flex-direction: row; gap: 2px; width: 100%; overflow: visible; }   /* the bottom bar itself scrolls sideways */
   .nav a { flex: 1; min-width: 56px; flex-direction: column; gap: 2px; font-size: .66rem; min-height: 56px; }
   .nav a span.lbl { display: block; }
   .nav a.active { box-shadow: none; }
