@@ -119,9 +119,21 @@ CREATE TABLE IF NOT EXISTS wh_users (
     full_name     VARCHAR(100) NOT NULL,
     password_hash VARCHAR(255) NOT NULL,
     role          ENUM('admin','staff') NOT NULL DEFAULT 'staff',
+    is_owner      TINYINT(1) NOT NULL DEFAULT 0,   -- 1 = the ★ Shop Owner (exactly one account)
     active        TINYINT(1) NOT NULL DEFAULT 1,
     created_at    DATETIME NOT NULL,
     last_login_at DATETIME NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Activity log: who did what and when (no foreign key, so records stay after a user is deleted)
+CREATE TABLE IF NOT EXISTS wh_activity_logs (
+    id         INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    user_id    INT UNSIGNED NULL,
+    user_name  VARCHAR(160) NOT NULL DEFAULT '',
+    action     VARCHAR(40)  NOT NULL,
+    details    VARCHAR(255) NOT NULL DEFAULT '',
+    created_at DATETIME NOT NULL,
+    INDEX idx_activity_time (created_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- Starter price list (the shop's paper order form; prices per load / per item)

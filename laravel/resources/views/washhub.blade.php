@@ -52,6 +52,7 @@
   <script src="{{ asset('vendor/washhub/js/views/reports.js') }}"></script>
   <script src="{{ asset('vendor/washhub/js/views/settings.js') }}"></script>
   <script src="{{ asset('vendor/washhub/js/views/users.js') }}"></script>
+  <script src="{{ asset('vendor/washhub/js/views/activity.js') }}"></script>
   <script src="{{ asset('vendor/washhub/js/views/account.js') }}"></script>
   <script src="{{ asset('vendor/washhub/index.js') }}"></script>
 </body>

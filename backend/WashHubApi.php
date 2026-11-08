@@ -81,7 +81,16 @@ class WashHubApi
         'history_delete'       => ['admin'],  // finished orders in a date range
         'customer_delete'      => ['admin'],  // a customer + all their orders
         'inventory_logs_clear' => ['admin'],  // the stock movement log
+        // Shop Owner only (an Owner / Admin account that also has the ★ Shop Owner mark, see OWNER_ONLY)
+        'activity_log'     => ['admin'],  // who did what and when
+        'owner_transfer'   => ['admin'],  // hand the Shop Owner mark to another Owner / Admin
     ];
+
+    /**
+     * Actions that need the ★ Shop Owner mark on top of the Owner / Admin role.
+     * There is exactly one Shop Owner (wh_users.is_owner = 1). Other admins can't use these.
+     */
+    public const OWNER_ONLY = ['activity_log', 'owner_transfer'];
 
     /** True if this role may run this action. $role = null means nobody is logged in. */
     public static function allowed(?string $role, string $action): bool
@@ -152,6 +161,10 @@ class WashHubApi
     /** @return mixed Plain array (or list) that will be JSON-encoded. */
     public function handle(string $action, array $in)
     {
+        // Owner protection: some actions need the ★ Shop Owner mark, not just the Owner / Admin role
+        if (in_array($action, self::OWNER_ONLY, true) && empty($this->user['is_owner'])) {
+            throw new InvalidArgumentException('Only the Shop Owner can do this.');
+        }
         switch ($action) {
             // --- setup / app start ---
             case 'ping':             $this->install(); return ['mode' => 'mysql', 'time' => $this->iso($this->now())];
@@ -163,6 +176,8 @@ class WashHubApi
             case 'user_save':        return $this->saveUser($in);
             case 'user_delete':      return $this->deleteUser((int) ($in['id'] ?? 0));
             case 'account_save':     return $this->saveAccount($in);
+            case 'owner_transfer':   return $this->transferOwner($in);
+            case 'activity_log':     return $this->activityLog($in);
             // --- settings & price list ---
             case 'settings_save':    return $this->saveSettings($in);
             case 'service_save':     return $this->saveService($in);
@@ -320,9 +335,23 @@ class WashHubApi
                 full_name     VARCHAR(100) NOT NULL,
                 password_hash VARCHAR(255) NOT NULL,
                 role          ENUM('admin','staff') NOT NULL DEFAULT 'staff',
+                is_owner      TINYINT(1) NOT NULL DEFAULT 0,   -- 1 = the ★ Shop Owner (exactly one account)
                 active        TINYINT(1) NOT NULL DEFAULT 1,
                 created_at    DATETIME NOT NULL,
                 last_login_at DATETIME NULL
+            ) $opts",
+
+            // Activity log: who did what and when (logins, account changes, deletions).
+            // No foreign key on purpose: the record stays even after that user account is deleted.
+            // The app has no action to edit or delete these rows.
+            "CREATE TABLE IF NOT EXISTS wh_activity_logs (
+                id         INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+                user_id    INT UNSIGNED NULL,
+                user_name  VARCHAR(160) NOT NULL DEFAULT '',
+                action     VARCHAR(40)  NOT NULL,
+                details    VARCHAR(255) NOT NULL DEFAULT '',
+                created_at DATETIME NOT NULL,
+                INDEX idx_activity_time (created_at)
             ) $opts",
 
         ];
@@ -414,9 +443,17 @@ class WashHubApi
 
         // First run: create the Owner / Admin account so someone can log in.
         // Default login: owner / owner123  (change it after the first login!)
+        if (!$this->db->query("SHOW COLUMNS FROM wh_users LIKE 'is_owner'")->fetch()) {
+            $this->db->exec('ALTER TABLE wh_users ADD COLUMN is_owner TINYINT(1) NOT NULL DEFAULT 0 AFTER role');
+        }
         if ((int) $this->db->query('SELECT COUNT(*) FROM wh_users')->fetchColumn() === 0) {
-            $this->db->prepare('INSERT INTO wh_users (username, full_name, password_hash, role, created_at) VALUES (?, ?, ?, ?, ?)')
+            $this->db->prepare('INSERT INTO wh_users (username, full_name, password_hash, role, is_owner, created_at) VALUES (?, ?, ?, ?, 1, ?)')
                 ->execute(['owner', 'Shop Owner', password_hash('owner123', PASSWORD_DEFAULT), 'admin', $this->dt($this->now())]);
+        }
+        // There must always be one ★ Shop Owner. If there is none (older database, or the owner row
+        // was removed in phpMyAdmin), the oldest active Owner / Admin account becomes the Shop Owner.
+        if ((int) $this->db->query('SELECT COUNT(*) FROM wh_users WHERE is_owner = 1')->fetchColumn() === 0) {
+            $this->db->exec("UPDATE wh_users SET is_owner = 1 WHERE role = 'admin' AND active = 1 ORDER BY id LIMIT 1");
         }
     }
 
@@ -444,15 +481,20 @@ class WashHubApi
         $user = $stmt->fetch(PDO::FETCH_ASSOC);
 
         // Same message for "no such user" and "wrong password", so nobody can find out which usernames exist
+        // Failed attempts are written to the activity log with the username typed (NEVER the password).
+        // No person is named as "who": anyone at the counter could have typed it.
         if (!$user || !password_verify($password, $user['password_hash'])) {
+            $this->record('login_failed', ($user ? 'Wrong password' : 'Unknown username') . ' · username typed: ' . mb_substr($username, 0, 60), []);
             throw new InvalidArgumentException('Wrong username or password.');
         }
         if (!$user['active']) {
+            $this->record('login_failed', "Disabled account · username typed: {$user['username']}", []);
             throw new InvalidArgumentException('This account is disabled. Please ask the Owner / Admin.');
         }
 
         $this->db->prepare('UPDATE wh_users SET last_login_at = ? WHERE id = ?')
             ->execute([$this->dt($this->now()), $user['id']]);
+        $this->record('login', 'Logged in', $user);
 
         return $this->publicUser($user);
     }
@@ -473,14 +515,16 @@ class WashHubApi
     /** The actions the current user may use. The screen uses this list to hide what they can't do. */
     private function myPermissions(): array
     {
-        $role = $this->user['role'] ?? null;
-        return array_values(array_filter(array_keys(self::PERMISSIONS), fn ($action) => self::allowed($role, $action)));
+        $role    = $this->user['role'] ?? null;
+        $isOwner = !empty($this->user['is_owner']);
+        return array_values(array_filter(array_keys(self::PERMISSIONS), fn ($action) =>
+            self::allowed($role, $action) && ($isOwner || !in_array($action, self::OWNER_ONLY, true))));
     }
 
-    /** Owner / Admin only: list every account (never the password hashes). */
+    /** Owner / Admin only: list every account (never the password hashes). The Shop Owner is listed first. */
     private function users(): array
     {
-        $rows = $this->db->query("SELECT * FROM wh_users ORDER BY FIELD(role, 'admin', 'staff'), full_name")
+        $rows = $this->db->query("SELECT * FROM wh_users ORDER BY is_owner DESC, FIELD(role, 'admin', 'staff'), full_name")
             ->fetchAll(PDO::FETCH_ASSOC);
         return array_map(fn ($u) => $this->publicUser($u) + [
             'active'        => (bool) $u['active'],
@@ -509,6 +553,27 @@ class WashHubApi
         if ($id > 0 && $id === (int) ($this->user['id'] ?? 0) && ($role !== $this->user['role'] || !$active)) {
             throw new InvalidArgumentException("You can't change your own role or disable your own account.");
         }
+        // Load the account as it is now (to check the owner rules and to log what changed)
+        $old = null;
+        if ($id > 0) {
+            $stmt = $this->db->prepare('SELECT * FROM wh_users WHERE id = ?');
+            $stmt->execute([$id]);
+            $old = $stmt->fetch(PDO::FETCH_ASSOC) ?: null;
+            if (!$old) {
+                throw new InvalidArgumentException('User not found.');
+            }
+        }
+        // Owner protection: an admin who is NOT the Shop Owner may only manage Staff accounts.
+        // (Editing your own account is fine; the rule above already stops you changing your own role.)
+        $isSelf = $id > 0 && $id === (int) ($this->user['id'] ?? 0);
+        if (!$isSelf && empty($this->user['is_owner'])) {
+            if ($old && $old['role'] === 'admin') {
+                throw new InvalidArgumentException('Only the Shop Owner can change another Owner / Admin account.');
+            }
+            if ($role === 'admin') {
+                throw new InvalidArgumentException('Only the Shop Owner can add an Owner / Admin or promote someone to Owner / Admin.');
+            }
+        }
         if ($id === 0 && $password === '') {
             throw new InvalidArgumentException('Set a password for the new account.');
         }
@@ -516,6 +581,19 @@ class WashHubApi
             $this->checkNewPassword($password);
         }
         $this->assertUsernameFree($username, $id);
+
+        // Activity log: write down exactly what changed (never the password itself)
+        if ($old) {
+            $changes = [];
+            if ($old['full_name'] !== $fullName) { $changes[] = "name \"{$old['full_name']}\" → \"$fullName\""; }
+            if ($old['username'] !== $username)  { $changes[] = "username {$old['username']} → $username"; }
+            if ($old['role'] !== $role)          { $changes[] = 'role ' . self::roleName($old['role']) . ' → ' . self::roleName($role); }
+            if ((int) $old['active'] !== $active) { $changes[] = $active ? 'enabled the account again' : 'disabled the account'; }
+            if ($password !== '')                { $changes[] = 'reset the password'; }
+            $log = $changes ? ['user_edit', "$fullName ($username): " . implode(', ', $changes)] : null;
+        } else {
+            $log = ['user_add', "$fullName ($username) as " . self::roleName($role) . ($active ? '' : ', disabled')];
+        }
 
         if ($id > 0) {
             $stmt = $this->db->prepare('UPDATE wh_users SET full_name = ?, username = ?, role = ?, active = ? WHERE id = ?');
@@ -528,6 +606,9 @@ class WashHubApi
             $this->db->prepare('INSERT INTO wh_users (username, full_name, password_hash, role, active, created_at) VALUES (?, ?, ?, ?, ?, ?)')
                 ->execute([$username, $fullName, password_hash($password, PASSWORD_DEFAULT), $role, $active, $this->dt($this->now())]);
         }
+        if ($log) {
+            $this->record(...$log);   // written only after the save worked
+        }
         return $this->users();
     }
 
@@ -535,18 +616,103 @@ class WashHubApi
      * Owner / Admin only: permanently delete an account. Payload {id}.
      * Orders and payments are not linked to user accounts, so no shop records are lost.
      * You can't delete your own account (so the shop always keeps an Owner / Admin).
+     * Owner protection: nobody can delete the ★ Shop Owner, and only the Shop Owner can delete another Owner / Admin.
      */
     private function deleteUser(int $id): array
     {
         if ($id === (int) ($this->user['id'] ?? 0)) {
             throw new InvalidArgumentException("You can't delete your own account.");
         }
-        $stmt = $this->db->prepare('DELETE FROM wh_users WHERE id = ?');
+        $stmt = $this->db->prepare('SELECT * FROM wh_users WHERE id = ?');
         $stmt->execute([$id]);
-        if ($stmt->rowCount() === 0) {
+        $target = $stmt->fetch(PDO::FETCH_ASSOC);
+        if (!$target) {
             throw new InvalidArgumentException('User not found.');
         }
+        if ($target['is_owner']) {
+            throw new InvalidArgumentException("The Shop Owner's account can't be deleted.");
+        }
+        if ($target['role'] === 'admin' && empty($this->user['is_owner'])) {
+            throw new InvalidArgumentException('Only the Shop Owner can delete another Owner / Admin account.');
+        }
+        $this->db->prepare('DELETE FROM wh_users WHERE id = ?')->execute([$id]);
+        $this->record('user_delete', "{$target['full_name']} ({$target['username']}), " . self::roleName($target['role']));
         return $this->users();
+    }
+
+    /**
+     * Shop Owner only: hand the ★ Shop Owner mark to another active Owner / Admin. Payload {id, password}.
+     * Asks for the owner's own password again, so nobody can do this on an unlocked screen.
+     * Afterwards the old owner is a normal Owner / Admin (and the new owner could remove them).
+     */
+    private function transferOwner(array $in): array
+    {
+        $stmt = $this->db->prepare('SELECT * FROM wh_users WHERE id = ?');
+        $stmt->execute([(int) ($this->user['id'] ?? 0)]);
+        $me = $stmt->fetch(PDO::FETCH_ASSOC);
+        if (!$me || !password_verify((string) ($in['password'] ?? ''), $me['password_hash'])) {
+            throw new InvalidArgumentException('Your password is incorrect.');
+        }
+        $id = (int) ($in['id'] ?? 0);
+        if ($id === (int) $me['id']) {
+            throw new InvalidArgumentException('You are already the Shop Owner.');
+        }
+        $stmt->execute([$id]);
+        $target = $stmt->fetch(PDO::FETCH_ASSOC);
+        if (!$target) {
+            throw new InvalidArgumentException('User not found.');
+        }
+        if ($target['role'] !== 'admin' || !$target['active']) {
+            throw new InvalidArgumentException('Only an active Owner / Admin account can become the Shop Owner.');
+        }
+        // One statement, so there is never a moment with zero or two owners
+        $this->db->prepare('UPDATE wh_users SET is_owner = CASE WHEN id = ? THEN 1 ELSE 0 END')->execute([$id]);
+        $this->record('owner_transfer', "Shop Owner handed over from {$me['full_name']} ({$me['username']}) to {$target['full_name']} ({$target['username']})");
+        return $this->users();
+    }
+
+    /** Shop Owner only: the latest activity log entries, newest first. Payload {limit?} (default 300, max 1000). */
+    private function activityLog(array $in): array
+    {
+        $limit = max(1, min(1000, (int) ($in['limit'] ?? 300)));
+        $rows  = $this->db->query("SELECT * FROM wh_activity_logs ORDER BY id DESC LIMIT $limit")->fetchAll(PDO::FETCH_ASSOC);
+        return array_map(fn ($r) => [
+            'id'         => (int) $r['id'],
+            'user_id'    => $r['user_id'] === null ? null : (int) $r['user_id'],
+            'user_name'  => $r['user_name'],
+            'action'     => $r['action'],
+            'details'    => $r['details'],
+            'created_at' => $this->iso($r['created_at']),
+        ], $rows);
+    }
+
+    /**
+     * Writes one line to the activity log. $who = the person doing it (default: the logged-in user; [] = nobody).
+     * Their name is copied into the row, so the record still makes sense after the account is deleted.
+     */
+    private function record(string $action, string $details = '', ?array $who = null): void
+    {
+        $who = $who ?? $this->user;
+        $this->db->prepare('INSERT INTO wh_activity_logs (user_id, user_name, action, details, created_at) VALUES (?, ?, ?, ?, ?)')
+            ->execute([
+                $who['id'] ?? null,
+                $who ? mb_substr("{$who['full_name']} ({$who['username']})", 0, 160) : '',
+                $action,
+                mb_substr($details, 0, 255),
+                $this->dt($this->now()),
+            ]);
+    }
+
+    /** 'admin' -> 'Owner / Admin', 'staff' -> 'Staff' (for log messages). */
+    private static function roleName(string $role): string
+    {
+        return $role === 'admin' ? 'Owner / Admin' : 'Staff';
+    }
+
+    /** 1234.5 -> '₱1,234.50' (for log messages). */
+    private static function peso($amount): string
+    {
+        return '₱' . number_format((float) $amount, 2);
     }
 
     /**
@@ -583,13 +749,28 @@ class WashHubApi
             $this->db->prepare('UPDATE wh_users SET password_hash = ? WHERE id = ?')
                 ->execute([password_hash($newPassword, PASSWORD_DEFAULT), $me['id']]);
         }
+
+        // Activity log (My Account changes)
+        $changes = [];
+        if ($me['full_name'] !== $fullName) { $changes[] = "name \"{$me['full_name']}\" → \"$fullName\""; }
+        if ($me['username'] !== $username)  { $changes[] = "username {$me['username']} → $username"; }
+        if ($newPassword !== '')            { $changes[] = 'changed own password'; }
+        if ($changes) {
+            $this->record('account_edit', implode(', ', $changes), ['id' => $me['id'], 'full_name' => $fullName, 'username' => $username]);
+        }
         return $this->freshUser((int) $me['id']);
     }
 
     /** The safe part of a user row: what the browser may see (no password hash). */
     private function publicUser(array $u): array
     {
-        return ['id' => (int) $u['id'], 'username' => $u['username'], 'full_name' => $u['full_name'], 'role' => $u['role']];
+        return [
+            'id'        => (int) $u['id'],
+            'username'  => $u['username'],
+            'full_name' => $u['full_name'],
+            'role'      => $u['role'],
+            'is_owner'  => !empty($u['is_owner']),   // the ★ Shop Owner
+        ];
     }
 
     /** Usernames: 3-50 characters, letters/numbers and . _ - @ (so an email address works too). */
@@ -691,11 +872,14 @@ class WashHubApi
      */
     private function deleteService(int $id): array
     {
-        $stmt = $this->db->prepare('DELETE FROM wh_services WHERE id = ?');
+        $stmt = $this->db->prepare('SELECT name, price FROM wh_services WHERE id = ?');
         $stmt->execute([$id]);
-        if ($stmt->rowCount() === 0) {
+        $svc = $stmt->fetch(PDO::FETCH_ASSOC);
+        if (!$svc) {
             throw new InvalidArgumentException('Service not found.');
         }
+        $this->db->prepare('DELETE FROM wh_services WHERE id = ?')->execute([$id]);
+        $this->record('service_delete', "{$svc['name']} (" . self::peso($svc['price']) . ')');
         return $this->services();
     }
 
@@ -1061,6 +1245,8 @@ class WashHubApi
     {
         $order = $this->order($id); // throws "Order not found." if it doesn't exist
         $this->db->prepare('DELETE FROM wh_orders WHERE id = ?')->execute([$id]);
+        $this->record('order_delete', "{$order['code']} · {$order['customer']['name']} · total " . self::peso($order['total'])
+            . ' · paid ' . self::peso($order['amount_paid']));
         return ['deleted' => $order['code']];
     }
 
@@ -1328,11 +1514,14 @@ class WashHubApi
      */
     private function deleteInventoryItem(int $id): array
     {
-        $stmt = $this->db->prepare('DELETE FROM wh_inventory WHERE id = ?');
+        $stmt = $this->db->prepare('SELECT name, unit, stock FROM wh_inventory WHERE id = ?');
         $stmt->execute([$id]);
-        if ($stmt->rowCount() === 0) {
+        $item = $stmt->fetch(PDO::FETCH_ASSOC);
+        if (!$item) {
             throw new InvalidArgumentException('Item not found.');
         }
+        $this->db->prepare('DELETE FROM wh_inventory WHERE id = ?')->execute([$id]);
+        $this->record('inventory_delete', "{$item['name']} (had " . (float) $item['stock'] . " {$item['unit']} in stock)");
         return $this->inventory();
     }
 
@@ -1386,6 +1575,8 @@ class WashHubApi
         if (!empty($in['confirm']) && $result['count'] > 0) {
             $this->db->prepare("DELETE FROM wh_orders WHERE $where")->execute($params);
             $result['deleted'] = true;
+            $this->record('history_delete', "{$result['count']} finished orders from $from to $to · billed "
+                . self::peso($result['billed']) . ' · paid ' . self::peso($result['paid']));
         }
         return $result;
     }
@@ -1410,13 +1601,16 @@ class WashHubApi
             $this->db->rollBack();
             throw $e;
         }
+        $this->record('customer_delete', "$name, with $orders order" . ($orders === 1 ? '' : 's'));
         return ['deleted' => $name, 'orders' => $orders];
     }
 
     /** Clear the inventory "Recent stock movements" log. Current stock levels are NOT changed. */
     private function clearInventoryLogs(): array
     {
-        return ['deleted' => (int) $this->db->exec('DELETE FROM wh_inventory_logs')];
+        $n = (int) $this->db->exec('DELETE FROM wh_inventory_logs');
+        $this->record('inventory_logs_clear', "$n stock movement record" . ($n === 1 ? '' : 's') . ' cleared');
+        return ['deleted' => $n];
     }
 
     // =====================================================================

@@ -210,6 +210,8 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); outlin
 .pill.overdue { background: var(--danger); color: #fff; border-color: var(--danger); }
 .pill.low     { background: var(--danger-soft); color: var(--danger); border-color: #f6bdb6; }
 .pill.ok      { background: var(--success-soft); color: var(--success); border-color: #b5e6c6; }
+.pill.owner   { background: #fff4c2; color: #7a5200; border-color: #f0d36b; }   /* ★ Shop Owner */
+.owner-note   { margin: 0; padding: 10px 12px; border-radius: var(--radius-sm); background: var(--warning-soft); color: var(--warning); }
 .pill.st-received  { background: var(--st-received-soft);  color: var(--st-received);  border-color: transparent; }
 .pill.st-washing   { background: var(--st-washing-soft);   color: var(--st-washing);   border-color: transparent; }
 .pill.st-drying    { background: var(--st-drying-soft);    color: var(--st-drying);    border-color: transparent; }

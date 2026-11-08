@@ -19,6 +19,8 @@ A touch-friendly front-desk system for a laundry shop: take orders, print claim 
 | **QR order tracking** | The customer scans the ticket's QR code with their phone and sees their order's stage, ready time and balance, with no login. The link uses a secret random code per order (order IDs are easy to guess) and shows only the first name. |
 | **Login & roles** | Every user logs in. The system has two sides. **Owner / Admin**: everything. **Staff**: New Order, Orders board, Customers and payments; **no Reports and no Users page** (also no Dashboard, Inventory or Settings). The server checks every request; the menu shows only what the role may use. |
 | **Users** (Owner / Admin) | Add accounts, choose Owner / Admin or Staff, reset passwords, disable people who may come back, or delete accounts permanently. You can't demote, disable or delete your own account. |
+| **★ Shop Owner protection** | One Owner / Admin account is the **Shop Owner** (the first account). Only the Shop Owner can add, change, disable, demote or delete **other Owner / Admin** accounts; other admins manage Staff only. Nobody can delete the Shop Owner. The Shop Owner can hand the role to another admin (**Make Shop Owner**, asks for their password). |
+| **Activity Log** (Shop Owner) | Who did what and when: logins and failed logins, account changes (added, role changed, disabled, password reset, deleted, ownership handed over) and every deletion (orders, customers, history, services, supplies, stock log). It can't be edited or deleted from the app. |
 | **My Account** (everyone) | Click your name in the sidebar: edit your name and username, change your password (needs the current one). |
 | **Dashboard** | Today's and last-7-days sales, a 7-day sales chart, active/in-progress counts per stage, overdue orders, orders ready for pickup (with "Notify" SMS text), uncollected balances and low-stock alerts. |
 | **Customers** | Profiles with order history and totals. "New order" pre-fills the POS. |
@@ -117,7 +119,8 @@ js/
     inventory.js       Inventory
     reports.js         Reports
     settings.js        Settings & price list
-    users.js           User accounts (Owner / Admin only)
+    users.js           User accounts (Owner / Admin only) + ★ Shop Owner protection
+    activity.js        Activity Log (★ Shop Owner only)
     account.js         My Account (every user)
 api.php                JSON API for XAMPP  (api.php?action=...): login session + permission check
 .htaccess              Tells the browser to always check for the newest JS/CSS
@@ -141,7 +144,8 @@ laravel/               Files that make it run inside Laravel (+ install script)
 | `wh_order_logs` | Status history (audit trail of the board) |
 | `wh_inventory` / `wh_inventory_logs` | Supplies and their stock movements |
 | `wh_settings` | Shop name, address, ticket terms, SMS template, QR code link |
-| `wh_users` | Login accounts: username, full name, **hashed** password (never the real one), role (`admin` = Owner / Admin side, `staff` = Staff side), active, last login |
+| `wh_users` | Login accounts: username, full name, **hashed** password (never the real one), role (`admin` = Owner / Admin side, `staff` = Staff side), `is_owner` (the one ★ Shop Owner), active, last login |
+| `wh_activity_logs` | Activity log: who (name copied in, so it survives account deletion), action, details, time |
 
 ### API actions (for documentation / testing)
 
@@ -151,6 +155,7 @@ laravel/               Files that make it run inside Laravel (+ install script)
 - **Everyone logged in:** `bootstrap` (also returns the user's permission list), `account_save`, `orders`, `order`, `order_status`
 - **Both sides (Owner / Admin and Staff):** `order_delete`, `order_create`, `order_payment`, `order_notify`, `customers`, `customer_save`
 - **Owner / Admin only:** `dashboard`, `report`, `inventory`, `inventory_save`, `inventory_adjust`, `inventory_logs`, `inventory_delete`, `service_save`, `service_delete`, `settings_save`, `users`, `user_save`, `user_delete`, `history_delete`, `customer_delete`, `inventory_logs_clear`
+- **★ Shop Owner only** (`WashHubApi::OWNER_ONLY`): `activity_log`, `owner_transfer`. Also, `user_save` / `user_delete` on another Owner / Admin account is refused unless you are the Shop Owner.
 
 The full list lives in `WashHubApi::PERMISSIONS`. An action not on the list is refused for everyone ("default deny"). Not logged in → HTTP 401; logged in but not allowed → 403.
 
@@ -169,7 +174,7 @@ Example: http://localhost/washhub/api.php?action=orders&status=active
 | Laravel shows 419 | The page must be opened through the `/washhub` route (it supplies the CSRF token). |
 | Wrong times | The shop timezone is `Asia/Manila` (`WashHubApi::TIMEZONE`). |
 | "Can't load the app — Please log in first" with no login screen | The browser is running an old cached `index.js`. Press **Ctrl+F5**. |
-| Forgot the Owner / Admin password | If another Owner / Admin exists, they can reset it under **Users**. Otherwise, in phpMyAdmin run `DELETE FROM wh_users;` and reload the app: it recreates `owner` / `owner123`. Orders and customers are not affected, but staff accounts must be added again. |
+| Forgot the Owner / Admin password | The ★ Shop Owner can reset any admin's password under **Users**. Because of owner protection, nobody in the app can reset the **Shop Owner's** own password. In that case, in phpMyAdmin run `DELETE FROM wh_users;` and reload the app: it recreates `owner` / `owner123`. Orders and customers are not affected, but staff accounts must be added again. |
 | QR code opens nothing on the phone | Set **Settings → QR code link** to the PC's network address (not `localhost`), and connect the phone to the same Wi-Fi. |
 
 > Team note (see CodesReferences.txt): every file starts with a comment explaining what it's for, and each section is labeled. Please keep adding comments when you change code.
