@@ -149,6 +149,8 @@
             </table></div>
             <div>
               ${order.discount > 0 ? `<div class="sum-row"><span>Discount</span><span>−${WH.money(order.discount)}</span></div>` : ''}
+              ${order.loyalty_discount > 0 ? `<div class="sum-row" style="color:var(--success)"><span>★ Loyalty FREE used</span><span>−${WH.money(order.loyalty_discount)}</span></div>` : ''}
+              ${order.loyalty_ticks > 0 ? `<div class="sum-row small muted"><span>Loyalty ticks earned</span><span>+${order.loyalty_ticks}</span></div>` : ''}
               <div class="sum-row strong"><span>Total</span><span>${WH.money(order.total)}</span></div>
               ${order.payments.map((p) => `<div class="sum-row small"><span>${WH.methodLabel(p.method)} · ${WH.fmtDateTime(p.paid_at)}</span><span>${WH.money(p.amount)}</span></div>`).join('')}
               <div class="sum-row strong"><span>Balance</span><span>${WH.money(order.balance)}</span></div>

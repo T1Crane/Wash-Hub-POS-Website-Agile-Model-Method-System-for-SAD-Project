@@ -32,7 +32,29 @@
   });
 
   /** Customer profile with order history */
-  const openCustomer = async (c, reload) => {
+  /** The customer's loyalty card: ticked boxes in blue, FREE boxes in yellow. */
+  const loyaltyCardHTML = (c) => {
+    const ticks = Number(c.loyalty_ticks) || 0;
+    const cfg = WH.loyaltyConfig();
+    if (!cfg.enabled) return '';
+    const card = Math.floor(ticks / cfg.size) + 1;   // the card the next tick goes on
+    const filled = ticks % cfg.size;
+    let boxes = '';
+    for (let i = 1; i <= cfg.size; i++) {
+      boxes += `<span class="loyal-box ${i <= filled ? 'done' : ''} ${i % cfg.every === 0 ? 'free' : ''}">${i % cfg.every === 0 ? 'FREE' : i}</span>`;
+    }
+    const next = WH.loyaltyToNext(ticks, cfg);
+    return `<div class="loyal" style="margin-bottom:16px">
+      <div class="loyal-head"><b>★ Loyalty card #${card} · ${filled}/${cfg.size} ticks</b>
+        ${c.loyalty_free_available ? `<span class="pill paid">${c.loyalty_free_available} FREE available</span>` : ''}
+        ${WH.can('customer_loyalty') ? `<button class="btn btn-sm" data-act="loyalty">${WH.icon('edit')} Adjust ticks</button>` : ''}</div>
+      <div class="loyal-grid" style="grid-template-columns:repeat(${Math.min(cfg.size, 7)},1fr);margin-top:8px">${boxes}</div>
+      <div class="small muted">${next} more tick${next === 1 ? '' : 's'} to the next FREE (${h(WH.loyaltyRewardText(cfg))}) · ${ticks} tick${ticks === 1 ? '' : 's'} in total · FREE earned ${c.loyalty_free_earned || 0} / used ${c.loyalty_free_used || 0}</div>
+    </div>`;
+  };
+
+  /** Customer window (also opened from the Loyalty Card page: "View orders") */
+  const openCustomer = WH.openCustomer = async (c, reload) => {
     let orders = [];
     try { orders = await WH.api('orders', { customer_id: c.id, limit: 100 }); } catch (e) { WH.error(e); }
     const m = WH.modal({
@@ -43,6 +65,7 @@
           <dl class="kv"><dt>Phone</dt><dd>${h(c.phone || '—')}</dd><dt>Address</dt><dd>${h(c.address || '—')}</dd><dt>Notes</dt><dd>${h(c.notes || '—')}</dd></dl>
           <dl class="kv"><dt>Orders</dt><dd>${c.order_count}</dd><dt>Total billed</dt><dd>${WH.money(c.total_spent)}</dd><dt>Last visit</dt><dd>${WH.fmtDate(c.last_order_at)}</dd></dl>
         </div>
+        ${loyaltyCardHTML(c)}
         <h3 style="margin-bottom:8px">Order history</h3>
         ${orders.length ? `<div class="table-wrap"><table class="table"><thead><tr><th>Order ID</th><th>Date</th><th>Items</th><th class="right">Total</th><th>Payment</th><th>Status</th></tr></thead>
           <tbody>${orders.map((o) => `<tr class="clickable" data-open="${o.id}"><td class="strong">${h(o.code)}</td><td>${WH.fmtDate(o.created_at)}</td>
@@ -54,7 +77,31 @@
     });
     WH.bindOrderCards(m.el, orders);
     m.el.querySelector('[data-act="edit"]').onclick = async () => { m.close(); if (await WH.editCustomer(c)) reload(); };
-    m.el.querySelector('[data-act="order"]').onclick = () => { m.close(); WH.startOrderFor({ id: c.id, name: c.name, phone: c.phone, address: c.address, notes: c.notes }); };
+    m.el.querySelector('[data-act="order"]').onclick = () => { m.close(); WH.startOrderFor({ id: c.id, name: c.name, phone: c.phone, address: c.address, notes: c.notes, loyalty_ticks: c.loyalty_ticks, loyalty_free_used: c.loyalty_free_used }); };
+
+    // Owner / Admin: set the ticks by hand (e.g. copy an old paper card). Written to the Activity Log.
+    const loyBtn = m.el.querySelector('[data-act="loyalty"]');
+    if (loyBtn) loyBtn.onclick = () => {
+      const cfg = WH.loyaltyConfig();
+      const p = WH.modal({
+        title: `Loyalty ticks · ${c.name}`,
+        body: `<div class="stack">
+          <p class="small muted" style="margin:0">Total ticks over all cards. Example: card #2 with 3 boxes ticked = ${cfg.size} + 3 = ${cfg.size + 3}.</p>
+          <label class="field">Total ticks<input type="number" name="ticks" min="0" step="1" value="${Number(c.loyalty_ticks) || 0}"></label>
+          <label class="field">FREE already used<input type="number" name="free_used" min="0" step="1" value="${Number(c.loyalty_free_used) || 0}"></label>
+          <label class="field">Note (optional)<input type="text" name="note" maxlength="100" placeholder="e.g. From paper card"></label>
+        </div>`,
+        foot: `<button class="btn" data-close>Cancel</button><button class="btn btn-primary" data-act="save">${WH.icon('check')} Save</button>`,
+      });
+      p.el.querySelector('[data-act="save"]').onclick = async () => {
+        try {
+          const r = await WH.api('customer_loyalty', { id: c.id, ...WH.formData(p.el) });
+          p.close(); m.close();
+          WH.toast(`${c.name}: ${r.loyalty_ticks} ticks · ${r.loyalty_free_available} FREE available`, 'success');
+          reload();
+        } catch (e) { WH.error(e); }
+      };
+    };
 
     // Owner / Admin: delete the customer AND all their orders (asks first, warns about unfinished orders)
     const del = m.el.querySelector('[data-act="delete"]');

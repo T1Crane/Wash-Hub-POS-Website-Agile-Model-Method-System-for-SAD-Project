@@ -26,6 +26,7 @@ CREATE TABLE IF NOT EXISTS wh_services (
     color            VARCHAR(20) NOT NULL DEFAULT 'blue',
     active           TINYINT(1) NOT NULL DEFAULT 1,
     sort_order       INT NOT NULL DEFAULT 0,
+    loyalty          TINYINT(1) NOT NULL DEFAULT 1,   -- 1 = each load earns a loyalty tick
     deleted_at       DATETIME NULL DEFAULT NULL   -- soft delete: NULL = active, a date = in the Trash
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -36,6 +37,8 @@ CREATE TABLE IF NOT EXISTS wh_customers (
     address    VARCHAR(255) NOT NULL DEFAULT '',
     notes      VARCHAR(255) NOT NULL DEFAULT '',
     created_at DATETIME NOT NULL,
+    loyalty_ticks INT UNSIGNED NOT NULL DEFAULT 0,   -- loyalty card: total ticks (over all cards)
+    loyalty_free_used INT UNSIGNED NOT NULL DEFAULT 0,  -- FREE rewards already used (earned - used = available)
     deleted_at DATETIME NULL DEFAULT NULL,   -- soft delete
     KEY idx_customer_phone (phone),
     KEY idx_customer_name (name)
@@ -61,6 +64,11 @@ CREATE TABLE IF NOT EXISTS wh_orders (
     status_updated_at DATETIME NOT NULL,
     completed_at      DATETIME NULL,
     notified_at       DATETIME NULL,
+    loyalty_ticks     INT UNSIGNED  NOT NULL DEFAULT 0,  -- ticks this order earned
+    loyalty_counted   TINYINT(1)    NOT NULL DEFAULT 0,  -- 1 = those ticks are in the customer total
+    loyalty_rewards   INT UNSIGNED  NOT NULL DEFAULT 0,  -- FREE boxes this order reached
+    loyalty_discount  DECIMAL(10,2) NOT NULL DEFAULT 0,  -- peso value of the loyalty reward
+    loyalty_after     INT UNSIGNED  NULL,                -- customer total ticks after this order
     deleted_at        DATETIME NULL DEFAULT NULL,   -- soft delete
     KEY idx_order_status (status),
     KEY idx_order_created (created_at),
@@ -143,21 +151,21 @@ CREATE TABLE IF NOT EXISTS wh_activity_logs (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- Starter price list (the shop's paper order form; prices per load / per item)
-INSERT INTO wh_services (name, unit, price, turnaround_hours, is_express, color, sort_order) VALUES
-('Wash', 'pc', 65, 24, 0, 'blue', 1),
-('Wash & Dry', 'pc', 130, 24, 0, 'blue', 2),
-('Dry', 'pc', 80, 24, 0, 'amber', 3),
-('Dry & Fold', 'pc', 100, 24, 0, 'amber', 4),
-('Wash, Dry, & Fold', 'pc', 150, 24, 0, 'teal', 5),
-('Spin & Dry', 'pc', 100, 24, 0, 'teal', 6),
-('Package A', 'pc', 180, 24, 0, 'violet', 7),
-('Package B', 'pc', 200, 24, 0, 'violet', 8),
-('Package C', 'pc', 220, 24, 0, 'violet', 9),
-('Addt Detergent', 'pc', 15, 24, 0, 'green', 10),
-('Addt Fabcon', 'pc', 15, 24, 0, 'green', 11),
-('Over 8 kilos (Wash & Dry)', 'pc', 40, 24, 0, 'pink', 12),
-('Over 8 kilos (Wash or Dry)', 'pc', 20, 24, 0, 'pink', 13),
-('Blue Plastic', 'pc', 12, 24, 0, 'slate', 14);
+INSERT INTO wh_services (name, unit, price, turnaround_hours, is_express, color, sort_order, loyalty) VALUES
+('Wash', 'pc', 65, 24, 0, 'blue', 1, 1),
+('Wash & Dry', 'pc', 130, 24, 0, 'blue', 2, 1),
+('Dry', 'pc', 80, 24, 0, 'amber', 3, 1),
+('Dry & Fold', 'pc', 100, 24, 0, 'amber', 4, 1),
+('Wash, Dry, & Fold', 'pc', 150, 24, 0, 'teal', 5, 1),
+('Spin & Dry', 'pc', 100, 24, 0, 'teal', 6, 1),
+('Package A', 'pc', 180, 24, 0, 'violet', 7, 1),
+('Package B', 'pc', 200, 24, 0, 'violet', 8, 1),
+('Package C', 'pc', 220, 24, 0, 'violet', 9, 1),
+('Addt Detergent', 'pc', 15, 24, 0, 'green', 10, 0),
+('Addt Fabcon', 'pc', 15, 24, 0, 'green', 11, 0),
+('Over 8 kilos (Wash & Dry)', 'pc', 40, 24, 0, 'pink', 12, 0),
+('Over 8 kilos (Wash or Dry)', 'pc', 20, 24, 0, 'pink', 13, 0),
+('Blue Plastic', 'pc', 12, 24, 0, 'slate', 14, 0);
 
 -- Starter supplies
 INSERT INTO wh_inventory (name, unit, stock, reorder_level, cost, updated_at) VALUES

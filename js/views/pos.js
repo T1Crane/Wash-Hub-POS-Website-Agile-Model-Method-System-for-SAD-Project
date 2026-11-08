@@ -20,6 +20,8 @@
     discount: '',
     method: 'cash',
     tendered: '',
+    loyaltyTicks: null,   // null = automatic (1 per load); a number = changed by the cashier
+    loyaltyUse: 0,        // FREE rewards the cashier uses on this order ('save' mode)
   });
   WH.posDraft = WH.posDraft || newDraft();
 
@@ -70,6 +72,7 @@
           </div>
           <div class="card">
             <div class="card-head"><h2><span class="step-no">4</span>Payment</h2></div>
+            <div id="pos-loyalty"></div>
             <div id="pos-totals"></div>
             <div class="segmented" id="pos-method" style="margin-top:12px">
               <button type="button" data-m="cash">${WH.icon('cash')} Cash</button>
@@ -102,11 +105,26 @@
       if (express) hours = express.turnaround_hours;
       subtotal = WH.round2(subtotal);
       const discount = Math.min(Math.max(WH.round2(d.discount), 0), subtotal);
-      const total = WH.round2(subtotal - discount);
+
+      // Loyalty card (the server checks this again with the customer's real ticks)
+      const cfg = WH.loyaltyConfig();
+      const loyaltyLines = d.lines.map((l) => {
+        const s = svc(l.service_id);
+        return s && { unit: s.unit, qty: s.unit === 'flat' ? 1 : Number(l.qty) || 0, price: s.price, loyalty: s.loyalty !== false };
+      }).filter(Boolean);
+      const hasCustomer = !!(d.customer || (d.newCustomer && d.newCustomer.name.trim()));
+      const before = d.customer ? Number(d.customer.loyalty_ticks) || 0 : 0;
+      const usedBefore = d.customer ? Number(d.customer.loyalty_free_used) || 0 : 0;
+      const auto = WH.loyaltyAutoTicks(loyaltyLines);
+      const loyalty = cfg.enabled && hasCustomer
+        ? { ...WH.loyaltyPlan({ cfg, before, usedBefore, ticks: d.loyaltyTicks === null ? auto : d.loyaltyTicks, useFree: d.loyaltyUse, lines: loyaltyLines, subtotal, manualDiscount: discount }), auto, cfg, show: true }
+        : { ticks: 0, reached: 0, used: 0, discount: 0, before, after: before, available: 0, maxUse: 0, auto, cfg, show: false };
+
+      const total = WH.round2(subtotal - discount - loyalty.discount);
       const tendered = Math.max(0, WH.round2(d.tendered));
       const applied = Math.min(tendered, total);
       return {
-        subtotal, discount, total, weight, express,
+        subtotal, discount, total, weight, express, loyalty,
         readyAt: new Date(Date.now() + (hours || 24) * 3600000),
         tendered, applied,
         change: WH.round2(Math.max(tendered - total, 0)),
@@ -223,7 +241,7 @@
             </div>
             <button class="btn btn-sm" id="cust-change">Change</button>
           </div>`;
-        $('#cust-change').onclick = () => { d.customer = null; renderCustomer(); $('#cust-q').focus(); };
+        $('#cust-change').onclick = () => { d.customer = null; d.loyaltyTicks = null; d.loyaltyUse = 0; renderCustomer(); renderTotals(); $('#cust-q').focus(); };
         return;
       }
       if (d.newCustomer) {
@@ -235,8 +253,12 @@
             <label class="field">Address / notes<input type="text" data-nc="address" maxlength="255" placeholder="For delivery, landmarks…" value="${h(n.address)}"></label>
             <button class="btn btn-ghost btn-sm" id="cust-search-again">${WH.icon('search')} Search existing instead</button>
           </div>`;
-        box.querySelectorAll('[data-nc]').forEach((inp) => inp.addEventListener('input', () => { n[inp.dataset.nc] = inp.value; }));
-        $('#cust-search-again').onclick = () => { d.newCustomer = null; renderCustomer(); };
+        box.querySelectorAll('[data-nc]').forEach((inp) => inp.addEventListener('input', () => {
+          const hadName = !!n.name.trim();
+          n[inp.dataset.nc] = inp.value;
+          if (hadName !== !!n.name.trim()) renderTotals();   // the loyalty card appears once there is a name
+        }));
+        $('#cust-search-again').onclick = () => { d.newCustomer = null; d.loyaltyTicks = null; d.loyaltyUse = 0; renderCustomer(); renderTotals(); };
         setTimeout(() => box.querySelector(n.name ? '[data-nc="phone"]' : '[data-nc="name"]').focus(), 0);
         return;
       }
@@ -259,7 +281,7 @@
               <span style="flex:1"><b>${h(c.name)}</b><br><span class="small muted">${h(c.phone || 'No phone')} · ${c.order_count} order${c.order_count === 1 ? '' : 's'}</span></span></button>`).join('')}
             <button type="button" data-add>${WH.icon('plus')}<span>Add “${h(term)}” as new customer</span></button>
           </div>`;
-          results.querySelectorAll('[data-pick]').forEach((b) => b.addEventListener('click', () => { d.customer = list[Number(b.dataset.pick)]; renderCustomer(); }));
+          results.querySelectorAll('[data-pick]').forEach((b) => b.addEventListener('click', () => { d.customer = list[Number(b.dataset.pick)]; d.loyaltyTicks = null; d.loyaltyUse = 0; renderCustomer(); renderTotals(); }));
           results.querySelector('[data-add]').addEventListener('click', () => startNew(term));
         } catch (e) { WH.error(e); }
       }, 200);
@@ -270,16 +292,78 @@
     const startNew = (term) => {
       const isPhone = /^[\d+\s-]{4,}$/.test(term);
       d.newCustomer = { name: isPhone ? '' : term, phone: isPhone ? term : '', address: '', notes: '' };
+      d.loyaltyTicks = null; d.loyaltyUse = 0;
       renderCustomer();
+      renderTotals();
+    };
+
+    // ---------- Loyalty card (like a paper stamp card: every 7th box is FREE) ----------
+    const renderLoyalty = (c) => {
+      const box = $('#pos-loyalty');
+      const L = c.loyalty;
+      if (!L.show || !d.lines.length) { box.innerHTML = ''; return; }
+      const cfg = L.cfg;
+      const card = Math.floor(L.before / cfg.size) + 1;   // the card the next tick goes on
+      const filled = L.before % cfg.size;                 // boxes already ticked on that card
+      const boxes = [];
+      for (let i = 1; i <= cfg.size; i++) {
+        const free = i % cfg.every === 0;
+        const cls = i <= filled ? 'done' : i <= filled + L.ticks ? 'now' : '';
+        boxes.push(`<span class="loyal-box ${cls} ${free ? 'free' : ''}">${free ? 'FREE' : i}</span>`);
+      }
+      const carry = Math.max(0, filled + L.ticks - cfg.size);
+      box.innerHTML = `
+        <div class="loyal">
+          <div class="loyal-head">
+            <span><b>★ Loyalty ticks</b> this order
+              ${d.loyaltyTicks === null ? '<span class="muted small">(auto)</span>' : '<button type="button" class="link small" data-loy="auto">(back to auto)</button>'}</span>
+            <div class="stepper sm">
+              <button type="button" data-loy="-1" aria-label="One tick less">−</button>
+              <span class="loyal-n">${L.ticks}</span>
+              <button type="button" data-loy="1" aria-label="One tick more">+</button>
+            </div>
+          </div>
+          <div class="small" style="margin:2px 0 6px">${d.customer ? '' : 'New customer · '}Card #${card} · ${filled}/${cfg.size} ticks</div>
+          <div class="loyal-grid" style="grid-template-columns:repeat(${Math.min(cfg.size, 7)},1fr)">${boxes.join('')}</div>
+          ${carry ? `<div class="small muted">+${carry} tick${carry === 1 ? '' : 's'} carry over to Card #${card + 1}.</div>` : ''}
+          ${L.reached && cfg.mode === 'save' ? `<div class="small" style="color:var(--success);font-weight:700">🎉 This order reaches ${L.reached > 1 ? `${L.reached} FREE boxes` : 'a FREE box'}!</div>` : ''}
+          ${cfg.mode === 'save' && (L.used + L.available) > 0 ? `
+            <div class="loyal-use">
+              <span><span class="pill paid">${L.used + L.available} FREE available</span>
+                <span class="small muted">Use now?</span></span>
+              <div class="stepper sm">
+                <button type="button" data-use="-1" aria-label="Use one FREE less">−</button>
+                <span class="loyal-n">${L.used}</span>
+                <button type="button" data-use="1" aria-label="Use one FREE more" ${L.used >= L.maxUse ? 'disabled' : ''}>+</button>
+              </div>
+            </div>` : ''}
+          ${L.used
+            ? `<div class="loyal-win">★ ${L.used} FREE used on this order: <b>−${WH.money(L.discount)}</b>${cfg.mode === 'auto' ? ' (FREE box reached)' : ''}</div>`
+            : `<div class="small muted">After this order: ${WH.loyaltyToNext(L.after, cfg)} more tick${WH.loyaltyToNext(L.after, cfg) === 1 ? '' : 's'} to the next FREE (${h(WH.loyaltyRewardText(cfg))}).</div>`}
+        </div>`;
+      box.querySelectorAll('[data-loy]').forEach((b) => b.addEventListener('click', () => {
+        const v = b.dataset.loy;
+        d.loyaltyTicks = v === 'auto' ? null : Math.max(0, Math.min(50, L.ticks + Number(v)));
+        if (d.loyaltyTicks === L.auto) d.loyaltyTicks = null;   // same as automatic = automatic
+        d.loyaltyUse = Math.min(d.loyaltyUse, L.used);          // keep the FREE choice, the plan re-checks the limit
+        renderTotals();
+      }));
+      // "save" mode: the cashier chooses how many saved FREE to use on this order
+      box.querySelectorAll('[data-use]').forEach((b) => b.addEventListener('click', () => {
+        d.loyaltyUse = Math.max(0, Math.min(L.maxUse, L.used + Number(b.dataset.use)));
+        renderTotals();
+      }));
     };
 
     // ---------- 4) Totals + payment ----------
     const renderTotals = () => {
       const c = calc();
+      renderLoyalty(c);
       $('#pos-totals').innerHTML = `
         ${c.weight > 0 ? `<div class="sum-row"><span>Total weight</span><span class="strong">${WH.num(c.weight)} kg</span></div>` : ''}
         <div class="sum-row"><span>Subtotal</span><span>${WH.money(c.subtotal)}</span></div>
         <div class="sum-row"><span>Discount (₱)</span><input type="number" class="discount-input" id="pos-discount" min="0" step="0.01" inputmode="decimal" placeholder="0.00" value="${h(d.discount)}"></div>
+        ${c.loyalty.discount > 0 ? `<div class="sum-row" style="color:var(--success);font-weight:700"><span>★ Loyalty FREE used</span><span>−${WH.money(c.loyalty.discount)}</span></div>` : ''}
         <div class="sum-row total"><span>Total</span><span>${WH.money(c.total)}</span></div>
         ${d.lines.length ? `<div class="eta">${WH.icon('clock')} Ready by ${WH.fmtWhen(c.readyAt.toISOString())}${c.express ? ' · Express' : ''}</div>` : ''}`;
       const disc = $('#pos-discount');
@@ -326,7 +410,7 @@
     $('#pos-notes').addEventListener('input', (e) => { d.notes = e.target.value; });
     $('#pos-clear').onclick = async () => {
       if (d.lines.length && !(await WH.confirm('Clear order?', 'Remove all services from this order?', 'Clear'))) return;
-      d.lines = []; d.discount = ''; d.tendered = '';
+      d.lines = []; d.discount = ''; d.tendered = ''; d.loyaltyTicks = null; d.loyaltyUse = 0;
       $('#pos-tendered').value = '';
       renderTiles(); renderLines(); renderTotals();
     };
@@ -365,6 +449,8 @@
           payment: { amount: c.applied, method: d.method },
           fulfillment: d.fulfillment,
           notes: d.notes,
+          loyalty_ticks: d.loyaltyTicks,   // null = let the server count them automatically
+          loyalty_use_free: c.loyalty.used, // FREE used on this order ('save' mode)
         });
         WH.posDraft = newDraft();
         WH.toast(`Order ${order.code} created`, 'success');

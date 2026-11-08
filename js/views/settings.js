@@ -48,10 +48,35 @@
           <div class="card-head"><h2>Services & prices</h2><button class="btn btn-sm" id="svc-add">${WH.icon('plus')} Add service</button></div>
           <p class="small muted" style="margin-top:-6px">Express add-ons replace the turnaround time of the whole order (e.g. 6 hours = same day). Untick <b>Active</b> to hide a service for a while, or <b>Delete</b> to remove it (it goes to the Trash). Old orders and tickets keep their prices either way.</p>
           <div class="table-wrap"><table class="table" id="svc-table">
-            <thead><tr><th>Name</th><th>Unit</th><th>Price (₱)</th><th>Turnaround (h)</th><th>Express</th><th>Color</th><th>Active</th><th></th></tr></thead>
+            <thead><tr><th>Name</th><th>Unit</th><th>Price (₱)</th><th>Turnaround (h)</th><th>Express</th><th title="Each load of this service earns a loyalty tick">★ Loyalty</th><th>Color</th><th>Active</th><th></th></tr></thead>
             <tbody></tbody>
           </table></div>
+          <p class="small muted" style="margin:8px 0 0"><b>★ Loyalty</b> = each load of this service earns a tick on the customer's loyalty card. Untick it for add-ons (detergent, plastic…).</p>
         </div>
+
+        ${canEditShop ? `
+        <div class="card" id="loy-card">
+          <div class="card-head"><h2>★ Loyalty card</h2><span class="small muted">Owner / Admin only</span></div>
+          <p class="small muted" style="margin-top:-6px">Like a paper stamp card: each load = 1 tick. When a tick lands on a <b>FREE</b> box, that order gets the reward automatically.
+            Example: a 14-box card with FREE every 7 → the 7th and 14th loads get the reward, then Card #2 starts.</p>
+          <div class="grid-2">
+            <label class="row span-2" style="font-weight:600"><input type="checkbox" name="loyalty_enabled" ${s.loyalty_enabled !== '0' ? 'checked' : ''} style="width:22px;height:22px"> Loyalty card is on</label>
+            <label class="field">Boxes on one card<input type="number" name="loyalty_card_size" min="2" max="50" step="1" value="${h(s.loyalty_card_size || 14)}"></label>
+            <label class="field">FREE on every … box<input type="number" name="loyalty_free_every" min="1" max="50" step="1" value="${h(s.loyalty_free_every || 7)}"></label>
+            <label class="field">Reward when a FREE box is reached
+              <select name="loyalty_reward">
+                ${[['free_load', '1 load free (the cheapest load in that order)'], ['amount', 'Fixed peso discount (₱)'], ['percent', 'Percent off the order (%)']]
+                  .map(([v, l]) => `<option value="${v}" ${(s.loyalty_reward || 'free_load') === v ? 'selected' : ''}>${l}</option>`).join('')}
+              </select></label>
+            <label class="field span-2">When a FREE box is reached
+              <select name="loyalty_mode">
+                <option value="save" ${(s.loyalty_mode || 'save') === 'save' ? 'selected' : ''}>Save it as "FREE available" — the cashier taps Use FREE on any later order</option>
+                <option value="auto" ${s.loyalty_mode === 'auto' ? 'selected' : ''}>Use it right away on the order that reaches the FREE box</option>
+              </select></label>
+            <label class="field">Discount value (for ₱ or %)<input type="number" name="loyalty_reward_value" min="0" step="0.01" value="${h(s.loyalty_reward_value || 0)}"></label>
+          </div>
+          <div class="row" style="margin-top:14px;justify-content:flex-end"><button class="btn btn-primary" id="loy-save">${WH.icon('check')} Save loyalty card</button></div>
+        </div>` : ''}
 
         ${WH.can('history_delete') ? `
         <div class="card" id="hist-card">
@@ -89,6 +114,16 @@
       } catch (e) { WH.error(e); }
     };
 
+    // ----- loyalty card settings -----
+    const loy = view.querySelector('#loy-card');
+    if (loy) loy.querySelector('#loy-save').onclick = async () => {
+      const f = WH.formData(loy);
+      try {
+        WH.state.settings = await WH.api('settings_save', { ...f, loyalty_enabled: f.loyalty_enabled ? '1' : '0' });
+        WH.toast('Loyalty card saved', 'success');
+      } catch (e) { WH.error(e); }
+    };
+
     // ----- services table -----
     const row = (svc) => `
       <tr data-id="${svc.id || ''}">
@@ -97,6 +132,7 @@
         <td><input type="number" name="price" min="0" step="0.01" value="${h(svc.price)}" style="width:110px"></td>
         <td><input type="number" name="turnaround_hours" min="1" step="1" value="${h(svc.turnaround_hours)}" style="width:100px"></td>
         <td><input type="checkbox" name="is_express" ${svc.is_express ? 'checked' : ''} style="width:22px;height:22px"></td>
+        <td><input type="checkbox" name="loyalty" ${svc.loyalty !== false ? 'checked' : ''} style="width:22px;height:22px" title="Earns a loyalty tick"></td>
         <td><select name="color">${COLORS.map((c) => `<option ${svc.color === c ? 'selected' : ''}>${c}</option>`).join('')}</select></td>
         <td><input type="checkbox" name="active" ${svc.active ? 'checked' : ''} style="width:22px;height:22px"></td>
         <td><div class="row" style="flex-wrap:nowrap">
@@ -142,7 +178,7 @@
       });
     };
     view.querySelector('#svc-add').onclick = () => {
-      tbody.insertAdjacentHTML('beforeend', row({ name: '', unit: 'pc', price: 0, turnaround_hours: 24, is_express: false, color: 'green', active: true }));
+      tbody.insertAdjacentHTML('beforeend', row({ name: '', unit: 'pc', price: 0, turnaround_hours: 24, is_express: false, loyalty: true, color: 'green', active: true }));
       bindRows();
       tbody.lastElementChild.querySelector('input').focus();
     };

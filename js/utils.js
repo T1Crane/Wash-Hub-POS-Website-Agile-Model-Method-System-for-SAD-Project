@@ -66,6 +66,71 @@ window.WH = window.WH || {};
   /** Short summary of order items for cards: "3.5 kg Wash-Dry-Fold · 2 pcs Ironing" */
   WH.itemsSummary = (items) => items.map((i) => (i.unit === 'flat' ? i.name : `${WH.qtyLabel(i.qty, i.unit)} ${i.name}`)).join(' · ');
 
+  // ---------- Loyalty card (same rules as WashHubApi::loyaltyPlan on the server) ----------
+  // A card has N boxes (default 14). Every Mth box (default 7 and 14) is FREE.
+  // Each load the customer brings = 1 tick. When a tick lands on a FREE box, that order gets the reward.
+  // Ticks keep counting across cards: tick 15 is box 1 of card #2.
+
+  /** Loyalty settings from the shop settings (Settings → Loyalty card). */
+  WH.loyaltyConfig = (s = WH.state.settings || {}) => {
+    const size = Math.min(50, Math.max(2, parseInt(s.loyalty_card_size, 10) || 14));
+    return {
+      enabled: String(s.loyalty_enabled ?? '1') === '1',
+      size,
+      every: Math.min(size, Math.max(1, parseInt(s.loyalty_free_every, 10) || 7)),
+      reward: ['free_load', 'amount', 'percent'].includes(s.loyalty_reward) ? s.loyalty_reward : 'free_load',
+      value: Math.max(0, Number(s.loyalty_reward_value) || 0),
+      mode: s.loyalty_mode === 'auto' ? 'auto' : 'save',   // save = FREE kept as 'FREE available'; auto = used at once
+    };
+  };
+  /** Is tick number t (counted over all cards: 1, 2, 3…) a FREE box? */
+  WH.isFreeTick = (t, cfg) => (((t - 1) % cfg.size) + 1) % cfg.every === 0;
+  /** The loads in an order that earn ticks, cheapest first, as peso values (1 piece/load = its price, a kg line = the whole line). */
+  WH.loyaltyLoads = (lines) => {
+    const loads = [];
+    lines.forEach((l) => {
+      if (!l.loyalty) return;
+      if (l.unit === 'pc') for (let i = 0; i < Math.floor(Number(l.qty) || 0); i++) loads.push(l.price);
+      else loads.push(l.unit === 'kg' ? (Number(l.qty) || 0) * l.price : l.price);
+    });
+    return loads.sort((a, b) => a - b);
+  };
+  /** Automatic ticks for an order = 1 per load of a "Loyalty" service (add-ons don't count). */
+  WH.loyaltyAutoTicks = (lines) => WH.loyaltyLoads(lines).length;
+  /** How many FREE boxes a total of `ticks` has reached. e.g. 17 ticks on a 14/7 card = 2. */
+  WH.freeEarned = (ticks, cfg) => Math.floor(ticks / cfg.size) * Math.floor(cfg.size / cfg.every) + Math.floor((ticks % cfg.size) / cfg.every);
+  /**
+   * What this order earns and uses.
+   * before / usedBefore = customer's ticks and FREE already used before this order.
+   * useFree = FREE the cashier wants to use now ("save" mode). In "auto" mode the FREE boxes reached are used at once.
+   * Returns { ticks, reached, used, discount, before, after, available (left after this order), maxUse, error }.
+   */
+  WH.loyaltyPlan = ({ cfg, before, usedBefore = 0, ticks, useFree = 0, lines, subtotal, manualDiscount }) => {
+    if (!cfg.enabled) return { ticks: 0, reached: 0, used: 0, discount: 0, before, after: before, available: 0, maxUse: 0 };
+    const loads = WH.loyaltyLoads(lines);
+    const after = before + ticks;
+    let reached = 0;
+    for (let t = before + 1; t <= after; t++) if (WH.isFreeTick(t, cfg)) reached++;
+    const available = Math.max(0, WH.freeEarned(after, cfg) - usedBefore);   // includes what this order just earned
+    const perOrder = cfg.reward === 'percent' ? 1 : cfg.reward === 'free_load' ? loads.length : 99;
+    const maxUse = Math.min(available, perOrder);
+    const used = cfg.mode === 'auto' ? Math.min(reached, maxUse) : Math.max(0, Math.min(Number(useFree) || 0, maxUse));
+    let discount = 0;
+    if (used) {
+      if (cfg.reward === 'amount') discount = used * cfg.value;                               // ₱X off per FREE
+      else if (cfg.reward === 'percent') discount = subtotal * Math.min(100, cfg.value) / 100;  // X% off the order
+      else discount = loads.slice(0, used).reduce((s, v) => s + v, 0);                        // the cheapest load(s) free
+    }
+    discount = WH.round2(Math.min(discount, Math.max(0, subtotal - manualDiscount)));
+    return { ticks, reached, used, discount, before, after, available: available - used, maxUse };
+  };
+  /** How many more ticks until the next FREE box. */
+  WH.loyaltyToNext = (after, cfg) => { for (let t = after + 1; t <= after + cfg.size; t++) if (WH.isFreeTick(t, cfg)) return t - after; return cfg.every; };
+  /** Card number and box (1-based) for a total tick count. 0 ticks = card 1, box 0. */
+  WH.loyaltyCard = (total, cfg) => ({ card: Math.floor(Math.max(0, total - 1) / cfg.size) + 1, box: total === 0 ? 0 : ((total - 1) % cfg.size) + 1 });
+  /** Short text for the reward setting, e.g. "1 free load". */
+  WH.loyaltyRewardText = (cfg) => (cfg.reward === 'amount' ? `${WH.money(cfg.value)} off` : cfg.reward === 'percent' ? `${cfg.value}% off the order` : '1 free load');
+
   // ---------- User roles & permissions ----------
   // The two sides of the system (same keys as WashHubApi::ROLES)
   WH.ROLES = {
@@ -141,6 +206,7 @@ window.WH = window.WH || {};
     x: '<path d="M18 6 6 18M6 6l12 12"/>',
     bell: '<path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/>',
     trash: '<path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6"/>',
+    star: '<path d="m12 3 2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1-4.4-4.3 6.1-.9z"/>',
     edit: '<path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z"/>',
     minus: '<path d="M5 12h14"/>',
     clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',

@@ -48,6 +48,7 @@
   <script src="{{ asset('vendor/washhub/js/views/pos.js') }}"></script>
   <script src="{{ asset('vendor/washhub/js/views/board.js') }}"></script>
   <script src="{{ asset('vendor/washhub/js/views/customers.js') }}"></script>
+  <script src="{{ asset('vendor/washhub/js/views/loyalty.js') }}"></script>
   <script src="{{ asset('vendor/washhub/js/views/inventory.js') }}"></script>
   <script src="{{ asset('vendor/washhub/js/views/reports.js') }}"></script>
   <script src="{{ asset('vendor/washhub/js/views/settings.js') }}"></script>

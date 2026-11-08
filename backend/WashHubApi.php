@@ -82,6 +82,8 @@ class WashHubApi
         // Owner / Admin only: deleting history
         'history_delete'       => ['admin'],  // finished orders in a date range
         'customer_delete'      => ['admin'],  // a customer + all their orders
+        'customer_loyalty' => ['admin'],      // change a customer's loyalty card by hand
+        'loyalty_card_save' => ['admin'],     // Loyalty Card page form (e.g. copy a paper card)
         'inventory_logs_clear' => ['admin'],  // the stock movement log
         // Shop Owner only (an Owner / Admin account that also has the ★ Shop Owner mark, see OWNER_ONLY)
         'activity_log'     => ['admin'],  // who did what and when
@@ -142,28 +144,36 @@ class WashHubApi
         'sms_template'  => 'Hi {name}! Your laundry ({code}) at {shop} is ready for pickup. Balance due: {balance}. Thank you!',
         // Web address the QR code on tickets points to (blank = the address the app is opened with)
         'public_url'    => '',
+        // Loyalty card: every N ticks (1 tick = 1 load) gives a reward. Default: 14-box card, FREE at box 7 and 14.
+        'loyalty_enabled'      => '1',          // '1' = on, '0' = off
+        'loyalty_card_size'    => '14',         // boxes on one card
+        'loyalty_free_every'   => '7',          // every 7th box is FREE
+        'loyalty_reward'       => 'free_load',  // free_load = cheapest load in the order is free | amount = ₱ off | percent = % off
+        'loyalty_reward_value' => '0',          // the ₱ or % for "amount" / "percent"
+        'loyalty_mode'         => 'save',       // save = FREE is saved as "FREE available", the cashier uses it later
+                                                // auto = FREE is used right away on the order that reaches the box
     ];
 
     /**
      * Starter price list = the shop's paper order form (Gap Wash Hub Laundry Form).
      * Prices are per load / per item, so every unit is "pc" (quantity).
-     * name, unit, price (PHP), turnaround hours, is express, tile color
+     * name, unit, price (PHP), turnaround hours, is express, tile color, earns a loyalty tick (1/0: add-ons don't)
      */
     public const DEFAULT_SERVICES = [
-        ['Wash',                       'pc', 65,  24, 0, 'blue'],
-        ['Wash & Dry',                 'pc', 130, 24, 0, 'blue'],
-        ['Dry',                        'pc', 80,  24, 0, 'amber'],
-        ['Dry & Fold',                 'pc', 100, 24, 0, 'amber'],
-        ['Wash, Dry, & Fold',          'pc', 150, 24, 0, 'teal'],
-        ['Spin & Dry',                 'pc', 100, 24, 0, 'teal'],
-        ['Package A',                  'pc', 180, 24, 0, 'violet'],
-        ['Package B',                  'pc', 200, 24, 0, 'violet'],
-        ['Package C',                  'pc', 220, 24, 0, 'violet'],
-        ['Addt Detergent',             'pc', 15,  24, 0, 'green'],
-        ['Addt Fabcon',                'pc', 15,  24, 0, 'green'],
-        ['Over 8 kilos (Wash & Dry)',  'pc', 40,  24, 0, 'pink'],
-        ['Over 8 kilos (Wash or Dry)', 'pc', 20,  24, 0, 'pink'],
-        ['Blue Plastic',               'pc', 12,  24, 0, 'slate'],
+        ['Wash',                       'pc', 65,  24, 0, 'blue', 1],
+        ['Wash & Dry',                 'pc', 130, 24, 0, 'blue', 1],
+        ['Dry',                        'pc', 80,  24, 0, 'amber', 1],
+        ['Dry & Fold',                 'pc', 100, 24, 0, 'amber', 1],
+        ['Wash, Dry, & Fold',          'pc', 150, 24, 0, 'teal', 1],
+        ['Spin & Dry',                 'pc', 100, 24, 0, 'teal', 1],
+        ['Package A',                  'pc', 180, 24, 0, 'violet', 1],
+        ['Package B',                  'pc', 200, 24, 0, 'violet', 1],
+        ['Package C',                  'pc', 220, 24, 0, 'violet', 1],
+        ['Addt Detergent',             'pc', 15,  24, 0, 'green', 0],
+        ['Addt Fabcon',                'pc', 15,  24, 0, 'green', 0],
+        ['Over 8 kilos (Wash & Dry)',  'pc', 40,  24, 0, 'pink', 0],
+        ['Over 8 kilos (Wash or Dry)', 'pc', 20,  24, 0, 'pink', 0],
+        ['Blue Plastic',               'pc', 12,  24, 0, 'slate', 0],
     ];
 
     private PDO $db;
@@ -215,6 +225,8 @@ class WashHubApi
             case 'customers':        return $this->customers($in);
             case 'customer_save':    return $this->saveCustomer($in);
             case 'customer_delete':  return $this->deleteCustomer((int) ($in['id'] ?? 0));
+            case 'customer_loyalty': return $this->setCustomerLoyalty($in);
+            case 'loyalty_card_save': return $this->saveLoyaltyCard($in);
             // --- deleting history ---
             case 'history_delete':       return $this->deleteHistory($in);
             case 'inventory_logs_clear': return $this->clearInventoryLogs();
@@ -269,6 +281,7 @@ class WashHubApi
                 color            VARCHAR(20) NOT NULL DEFAULT 'blue',
                 active           TINYINT(1) NOT NULL DEFAULT 1,
                 sort_order       INT NOT NULL DEFAULT 0,
+                loyalty          TINYINT(1) NOT NULL DEFAULT 1,   -- 1 = each load earns a loyalty tick (add-ons: 0)
                 deleted_at       DATETIME NULL DEFAULT NULL   -- soft delete: NULL = active, date = in Trash
             ) $opts",
 
@@ -279,6 +292,8 @@ class WashHubApi
                 address    VARCHAR(255) NOT NULL DEFAULT '',
                 notes      VARCHAR(255) NOT NULL DEFAULT '',
                 created_at DATETIME NOT NULL,
+                loyalty_ticks INT UNSIGNED NOT NULL DEFAULT 0,   -- loyalty card: total ticks so far (over all cards)
+                loyalty_free_used INT UNSIGNED NOT NULL DEFAULT 0,  -- FREE rewards already used (earned - used = available)
                 deleted_at DATETIME NULL DEFAULT NULL,   -- soft delete
                 KEY idx_customer_phone (phone),
                 KEY idx_customer_name (name)
@@ -305,6 +320,11 @@ class WashHubApi
                 status_updated_at DATETIME NOT NULL,
                 completed_at      DATETIME NULL,
                 notified_at       DATETIME NULL,
+                loyalty_ticks     INT UNSIGNED  NOT NULL DEFAULT 0,  -- ticks this order earned
+                loyalty_counted   TINYINT(1)    NOT NULL DEFAULT 0,  -- 1 = those ticks are in the customer's total
+                loyalty_rewards   INT UNSIGNED  NOT NULL DEFAULT 0,  -- FREE boxes this order reached
+                loyalty_discount  DECIMAL(10,2) NOT NULL DEFAULT 0,  -- peso value of the loyalty reward
+                loyalty_after     INT UNSIGNED  NULL,                -- customer's total ticks after this order (for the ticket)
                 deleted_at        DATETIME NULL DEFAULT NULL,   -- soft delete
                 KEY idx_order_status (status),
                 KEY idx_order_created (created_at),
@@ -410,6 +430,32 @@ class WashHubApi
             }
         }
 
+        // Upgrade for databases made before the loyalty card existed
+        if (!$this->db->query("SHOW COLUMNS FROM wh_services LIKE 'loyalty'")->fetch()) {
+            $this->db->exec('ALTER TABLE wh_services ADD COLUMN loyalty TINYINT(1) NOT NULL DEFAULT 1');
+            // the starter add-ons (detergent, fabcon, over 8 kilos, plastic) don't earn ticks
+            $addOns = array_column(array_filter(self::DEFAULT_SERVICES, fn ($s) => !$s[6]), 0);
+            $this->db->prepare('UPDATE wh_services SET loyalty = 0 WHERE name IN (' . implode(',', array_fill(0, count($addOns), '?')) . ')')->execute($addOns);
+        }
+        foreach ([
+            ['wh_customers', 'loyalty_ticks',    'INT UNSIGNED NOT NULL DEFAULT 0'],
+            ['wh_orders',    'loyalty_ticks',    'INT UNSIGNED NOT NULL DEFAULT 0'],
+            ['wh_orders',    'loyalty_counted',  'TINYINT(1) NOT NULL DEFAULT 0'],
+            ['wh_orders',    'loyalty_rewards',  'INT UNSIGNED NOT NULL DEFAULT 0'],
+            ['wh_orders',    'loyalty_discount', 'DECIMAL(10,2) NOT NULL DEFAULT 0'],
+            ['wh_orders',    'loyalty_after',    'INT UNSIGNED NULL'],
+        ] as [$table, $column, $type]) {
+            if (!$this->db->query("SHOW COLUMNS FROM $table LIKE '$column'")->fetch()) {
+                $this->db->exec("ALTER TABLE $table ADD COLUMN $column $type");
+            }
+        }
+        if (!$this->db->query("SHOW COLUMNS FROM wh_customers LIKE 'loyalty_free_used'")->fetch()) {
+            $this->db->exec('ALTER TABLE wh_customers ADD COLUMN loyalty_free_used INT UNSIGNED NOT NULL DEFAULT 0');
+            // FREE rewards already given on earlier orders count as used
+            $this->db->exec('UPDATE wh_customers c SET loyalty_free_used = (SELECT COALESCE(SUM(o.loyalty_rewards), 0) FROM wh_orders o
+                             WHERE o.customer_id = c.id AND o.loyalty_counted = 1)');
+        }
+
         // Upgrade for databases made before the QR tracking link existed:
         // add the column, then give every older order its own secret tracking code
         if (!$this->db->query("SHOW COLUMNS FROM wh_orders LIKE 'track_token'")->fetch()) {
@@ -506,7 +552,7 @@ class WashHubApi
     /** Adds the shop's price list (DEFAULT_SERVICES), in the same order as the paper form. */
     private function insertDefaultServices(): void
     {
-        $stmt = $this->db->prepare('INSERT INTO wh_services (name, unit, price, turnaround_hours, is_express, color, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?)');
+        $stmt = $this->db->prepare('INSERT INTO wh_services (name, unit, price, turnaround_hours, is_express, color, loyalty, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
         foreach (self::DEFAULT_SERVICES as $i => $row) {
             $stmt->execute([...$row, $i + 1]);
         }
@@ -867,6 +913,31 @@ class WashHubApi
 
     private function saveSettings(array $in): array
     {
+        // Loyalty card settings must be sensible numbers
+        if (isset($in['loyalty_card_size']) || isset($in['loyalty_free_every'])) {
+            $size  = (int) ($in['loyalty_card_size'] ?? $this->settings()['loyalty_card_size']);
+            $every = (int) ($in['loyalty_free_every'] ?? $this->settings()['loyalty_free_every']);
+            if ($size < 2 || $size > 50) {
+                throw new InvalidArgumentException('A loyalty card must have 2 to 50 boxes.');
+            }
+            if ($every < 1 || $every > $size) {
+                throw new InvalidArgumentException("The FREE box must be between 1 and $size.");
+            }
+        }
+        if (isset($in['loyalty_mode']) && !in_array($in['loyalty_mode'], ['save', 'auto'], true)) {
+            throw new InvalidArgumentException('Choose when a FREE reward is used.');
+        }
+        if (isset($in['loyalty_reward']) && !in_array($in['loyalty_reward'], ['free_load', 'amount', 'percent'], true)) {
+            throw new InvalidArgumentException('Choose a loyalty reward.');
+        }
+        if (isset($in['loyalty_reward_value'])) {
+            $in['loyalty_reward_value'] = (string) max(0, round((float) $in['loyalty_reward_value'], 2));
+        }
+        if (isset($in['loyalty_enabled'])) {
+            $in['loyalty_enabled'] = empty($in['loyalty_enabled']) || $in['loyalty_enabled'] === '0' ? '0' : '1';
+        }
+
+        $this->loyaltyCfg = null;   // the loyalty settings may change
         $stmt = $this->db->prepare('INSERT INTO wh_settings (skey, svalue) VALUES (?, ?) ON DUPLICATE KEY UPDATE svalue = VALUES(svalue)');
         foreach (array_keys(self::DEFAULT_SETTINGS) as $key) {
             if (array_key_exists($key, $in)) {
@@ -889,6 +960,7 @@ class WashHubApi
             'color'            => $r['color'],
             'active'           => (bool) $r['active'],
             'sort_order'       => (int) $r['sort_order'],
+            'loyalty'          => (bool) $r['loyalty'],   // earns loyalty ticks
         ], $rows);
     }
 
@@ -906,13 +978,14 @@ class WashHubApi
             preg_replace('/[^a-z]/', '', (string) ($in['color'] ?? 'blue')) ?: 'blue',
             !isset($in['active']) || $in['active'] ? 1 : 0,
             (int) ($in['sort_order'] ?? 0),
+            !isset($in['loyalty']) || $in['loyalty'] ? 1 : 0,   // earns loyalty ticks (default yes)
         ];
         $id = (int) ($in['id'] ?? 0);
         if ($id > 0) {
-            $this->db->prepare('UPDATE wh_services SET name=?, unit=?, price=?, turnaround_hours=?, is_express=?, color=?, active=?, sort_order=? WHERE id=? AND deleted_at IS NULL')
+            $this->db->prepare('UPDATE wh_services SET name=?, unit=?, price=?, turnaround_hours=?, is_express=?, color=?, active=?, sort_order=?, loyalty=? WHERE id=? AND deleted_at IS NULL')
                 ->execute([...$data, $id]);
         } else {
-            $this->db->prepare('INSERT INTO wh_services (name, unit, price, turnaround_hours, is_express, color, active, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+            $this->db->prepare('INSERT INTO wh_services (name, unit, price, turnaround_hours, is_express, color, active, sort_order, loyalty) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
                 ->execute($data);
         }
         return $this->services();
@@ -952,12 +1025,15 @@ class WashHubApi
         }
         // GROUP BY lists every column so it also works with ONLY_FULL_GROUP_BY (Laravel strict mode)
         // Order totals only count orders that are not in the Trash
-        $sql = "SELECT c.id, c.name, c.phone, c.address, c.notes, c.created_at,
+        if (!empty($in['loyalty_only'])) {   // Loyalty Card page: only customers who have a card going
+            $where .= ' AND (c.loyalty_ticks > 0 OR c.loyalty_free_used > 0)';
+        }
+        $sql = "SELECT c.id, c.name, c.phone, c.address, c.notes, c.created_at, c.loyalty_ticks, c.loyalty_free_used,
                        COUNT(o.id) AS order_count, MAX(o.created_at) AS last_order_at, COALESCE(SUM(o.total), 0) AS total_spent
                 FROM wh_customers c
                 LEFT JOIN wh_orders o ON o.customer_id = c.id AND o.deleted_at IS NULL
                 $where
-                GROUP BY c.id, c.name, c.phone, c.address, c.notes, c.created_at
+                GROUP BY c.id, c.name, c.phone, c.address, c.notes, c.created_at, c.loyalty_ticks, c.loyalty_free_used
                 ORDER BY last_order_at DESC, c.name
                 LIMIT $limit";
         $stmt = $this->db->prepare($sql);
@@ -972,7 +1048,7 @@ class WashHubApi
             'order_count'   => (int) $r['order_count'],
             'last_order_at' => $this->iso($r['last_order_at']),
             'total_spent'   => (float) $r['total_spent'],
-        ], $stmt->fetchAll(PDO::FETCH_ASSOC));
+        ] + $this->loyaltySummary($r), $stmt->fetchAll(PDO::FETCH_ASSOC));
     }
 
     private function saveCustomer(array $in): array
@@ -994,7 +1070,8 @@ class WashHubApi
         $stmt = $this->db->prepare('SELECT * FROM wh_customers WHERE id = ?');
         $stmt->execute([$id]);
         $c = $stmt->fetch(PDO::FETCH_ASSOC);
-        return ['id' => (int) $c['id'], 'name' => $c['name'], 'phone' => $c['phone'], 'address' => $c['address'], 'notes' => $c['notes']];
+        return ['id' => (int) $c['id'], 'name' => $c['name'], 'phone' => $c['phone'], 'address' => $c['address'], 'notes' => $c['notes']]
+             + $this->loyaltySummary($c);
     }
 
     /** Used by createOrder: picks an existing customer or creates a new one. */
@@ -1068,7 +1145,7 @@ class WashHubApi
             $params[] = $this->dayStart($in['to'], 1);
         }
         $limit = min(1000, max(1, (int) ($in['limit'] ?? 300)));
-        $sql   = 'SELECT o.*, c.name AS c_name, c.phone AS c_phone, c.address AS c_address, c.notes AS c_notes
+        $sql   = 'SELECT o.*, c.name AS c_name, c.phone AS c_phone, c.address AS c_address, c.notes AS c_notes, c.loyalty_ticks AS c_ticks, c.loyalty_free_used AS c_free_used
                   FROM wh_orders o JOIN wh_customers c ON c.id = o.customer_id '
                . ($where ? 'WHERE ' . implode(' AND ', $where) : '')
                . " ORDER BY o.created_at DESC LIMIT $limit";
@@ -1079,7 +1156,7 @@ class WashHubApi
 
     private function order(int $id): array
     {
-        $stmt = $this->db->prepare('SELECT o.*, c.name AS c_name, c.phone AS c_phone, c.address AS c_address, c.notes AS c_notes
+        $stmt = $this->db->prepare('SELECT o.*, c.name AS c_name, c.phone AS c_phone, c.address AS c_address, c.notes AS c_notes, c.loyalty_ticks AS c_ticks, c.loyalty_free_used AS c_free_used
                                     FROM wh_orders o JOIN wh_customers c ON c.id = o.customer_id WHERE o.id = ? AND o.deleted_at IS NULL');
         $stmt->execute([$id]);
         $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
@@ -1117,6 +1194,7 @@ class WashHubApi
 
         // --- 1) price every line from the database price list ---
         $lines = [];
+        $loyaltyLines = [];   // the same lines, for the loyalty card math
         $subtotal = 0.0;
         $weight = 0.0;
         $hours = 0;
@@ -1132,6 +1210,7 @@ class WashHubApi
             }
             $line = round($qty * $svc['price'], 2);
             $lines[] = [$svc['id'], $svc['name'], $svc['unit'], $qty, $svc['price'], $line];
+            $loyaltyLines[] = ['unit' => $svc['unit'], 'qty' => $qty, 'price' => $svc['price'], 'loyalty' => $svc['loyalty']];
             $subtotal += $line;
             if ($svc['unit'] === 'kg') {
                 $weight += $qty;
@@ -1150,8 +1229,6 @@ class WashHubApi
         }
         $subtotal = round($subtotal, 2);
         $discount = min(max(round((float) ($in['discount'] ?? 0), 2), 0), $subtotal);
-        $total    = round($subtotal - $discount, 2);
-        $paid     = min(max(round((float) ($in['payment']['amount'] ?? 0), 2), 0), $total);
         $method   = $this->paymentMethod($in['payment']['method'] ?? 'cash');
         $fulfil   = ($in['fulfillment'] ?? '') === 'delivery' ? 'delivery' : 'pickup';
         $notes    = mb_substr(trim((string) ($in['notes'] ?? '')), 0, 255);
@@ -1164,14 +1241,34 @@ class WashHubApi
             $this->db->beginTransaction();
             try {
                 $customerId = $this->resolveCustomer(is_array($in['customer'] ?? null) ? $in['customer'] : []);
-                $code = $this->nextOrderCode($now);
+
+                // --- loyalty card: ticks this order earns, and the reward if it reaches a FREE box ---
+                // (FOR UPDATE locks the customer row, so two counters can't both use the same FREE box)
+                $stmt = $this->db->prepare('SELECT loyalty_ticks, loyalty_free_used FROM wh_customers WHERE id = ? FOR UPDATE');
+                $stmt->execute([$customerId]);
+                $card = $stmt->fetch(PDO::FETCH_ASSOC);
+                $loyalty = $this->loyaltyPlan((int) $card['loyalty_ticks'], (int) $card['loyalty_free_used'],
+                    $in['loyalty_ticks'] ?? null, $in['loyalty_use_free'] ?? 0, $loyaltyLines, $subtotal, $discount);
+
+                $total = round($subtotal - $discount - $loyalty['discount'], 2);
+                $paid  = min(max(round((float) ($in['payment']['amount'] ?? 0), 2), 0), $total);
+                $code  = $this->nextOrderCode($now);
                 $this->db->prepare('INSERT INTO wh_orders
                         (code, track_token, customer_id, status, fulfillment, is_express, total_weight, subtotal, discount, total,
-                         amount_paid, payment_status, notes, created_at, ready_at, status_updated_at)
-                        VALUES (?, ?, ?, \'received\', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+                         amount_paid, payment_status, notes, created_at, ready_at, status_updated_at,
+                         loyalty_ticks, loyalty_counted, loyalty_rewards, loyalty_discount, loyalty_after)
+                        VALUES (?, ?, ?, \'received\', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)')
                     ->execute([$code, $this->newToken(), $customerId, $fulfil, $express ? 1 : 0, round($weight, 2), $subtotal, $discount, $total,
-                               $paid, $this->paymentStatus($paid, $total), $notes, $this->dt($now), $this->dt($readyAt), $this->dt($now)]);
+                               $paid, $this->paymentStatus($paid, $total), $notes, $this->dt($now), $this->dt($readyAt), $this->dt($now),
+                               $loyalty['ticks'], $loyalty['used'], $loyalty['discount'], $loyalty['after']]);
                 $orderId = (int) $this->db->lastInsertId();
+                $this->db->prepare('UPDATE wh_customers SET loyalty_ticks = ?, loyalty_free_used = loyalty_free_used + ? WHERE id = ?')
+                    ->execute([$loyalty['after'], $loyalty['used'], $customerId]);
+                if ($loyalty['ticks'] !== $loyalty['auto']) {
+                    // the cashier changed the number of ticks by hand -> write it down
+                    $this->record('loyalty_override', "$code: loyalty ticks set to {$loyalty['ticks']} (automatic count was {$loyalty['auto']})"
+                        . ($loyalty['used'] ? ' · FREE used ' . self::peso($loyalty['discount']) : ''));
+                }
 
                 $stmt = $this->db->prepare('INSERT INTO wh_order_items (order_id, service_id, name, unit, qty, unit_price, line_total) VALUES (?, ?, ?, ?, ?, ?, ?)');
                 foreach ($lines as $line) {
@@ -1300,6 +1397,8 @@ class WashHubApi
     {
         $order = $this->order($id); // throws "Order not found." if it doesn't exist (or is already in the Trash)
         $this->softDelete('wh_orders', $id);
+        // A wrong order shouldn't count on the loyalty card: take its ticks back (restoring it gives them back)
+        $this->takeBackLoyaltyTicks($order);
         $this->record('order_delete', "{$order['code']} · {$order['customer']['name']} · total " . self::peso($order['total'])
             . ' · paid ' . self::peso($order['amount_paid']));
         return ['deleted' => $order['code']];
@@ -1371,9 +1470,16 @@ class WashHubApi
                 'status_updated_at' => $this->iso($r['status_updated_at']),
                 'completed_at'      => $this->iso($r['completed_at']),
                 'notified_at'       => $this->iso($r['notified_at']),
-                'customer'          => ['id' => (int) $r['customer_id'], 'name' => $r['c_name'], 'phone' => $r['c_phone'], 'address' => $r['c_address'], 'notes' => $r['c_notes']],
+                'customer'          => ['id' => (int) $r['customer_id'], 'name' => $r['c_name'], 'phone' => $r['c_phone'], 'address' => $r['c_address'], 'notes' => $r['c_notes'],
+                                        'loyalty_ticks' => (int) $r['c_ticks'], 'loyalty_free_used' => (int) $r['c_free_used']],
                 'items'             => $items[$id] ?? [],
                 'payments'          => $payments[$id] ?? [],
+                // loyalty card for this order
+                'loyalty_ticks'     => (int) $r['loyalty_ticks'],
+                'loyalty_counted'   => (bool) $r['loyalty_counted'],
+                'loyalty_rewards'   => (int) $r['loyalty_rewards'],
+                'loyalty_discount'  => (float) $r['loyalty_discount'],
+                'loyalty_after'     => $r['loyalty_after'] === null ? null : (int) $r['loyalty_after'],
             ];
         }, $rows);
     }
@@ -1683,6 +1789,216 @@ class WashHubApi
     }
 
     // =====================================================================
+    //  LOYALTY CARD
+    //  1 tick per load. A card has N boxes (default 14); every Mth box (7, 14) is FREE.
+    //  The customer's running total is wh_customers.loyalty_ticks (counts over all cards:
+    //  tick 15 = box 1 of card #2). js/utils.js (WH.loyaltyPlan) has the same rules for the preview.
+    // =====================================================================
+
+    /** Loyalty settings read once per request (cleared when the settings are saved). */
+    private ?array $loyaltyCfg = null;
+
+    /** The loyalty settings as numbers. */
+    private function loyaltyConfig(): array
+    {
+        if ($this->loyaltyCfg !== null) {
+            return $this->loyaltyCfg;
+        }
+        $s    = $this->settings();
+        $size = max(2, min(50, (int) $s['loyalty_card_size']));
+        $cfg  = [
+            'enabled' => $s['loyalty_enabled'] === '1',
+            'size'    => $size,
+            'every'   => max(1, min($size, (int) $s['loyalty_free_every'])),
+            'reward'  => in_array($s['loyalty_reward'], ['free_load', 'amount', 'percent'], true) ? $s['loyalty_reward'] : 'free_load',
+            'value'   => max(0.0, (float) $s['loyalty_reward_value']),
+            'mode'    => $s['loyalty_mode'] === 'auto' ? 'auto' : 'save',
+        ];
+        return $this->loyaltyCfg = $cfg;
+    }
+
+    /** Is tick number $t (counted over all cards) on a FREE box? e.g. size 14, every 7: ticks 7, 14, 21, 28… */
+    private static function isFreeTick(int $t, array $cfg): bool
+    {
+        return ((($t - 1) % $cfg['size']) + 1) % $cfg['every'] === 0;
+    }
+
+    /** How many FREE boxes $ticks ticks have reached in total. e.g. 17 ticks on a 14/7 card = 2 (box 7 and box 14). */
+    private static function freeEarned(int $ticks, array $cfg): int
+    {
+        return intdiv($ticks, $cfg['size']) * intdiv($cfg['size'], $cfg['every']) + intdiv($ticks % $cfg['size'], $cfg['every']);
+    }
+
+    /** The loads in an order that earn ticks, cheapest first, as peso values (1 piece/load = its price, 1 kg line = the whole line). */
+    private static function loadValues(array $lines): array
+    {
+        $loads = [];
+        foreach ($lines as $l) {
+            if ($l['loyalty']) {
+                if ($l['unit'] === 'pc') {
+                    for ($i = 0; $i < (int) floor($l['qty']); $i++) {
+                        $loads[] = (float) $l['price'];
+                    }
+                } else {
+                    $loads[] = $l['unit'] === 'kg' ? $l['qty'] * $l['price'] : (float) $l['price'];
+                }
+            }
+        }
+        sort($loads);
+        return $loads;
+    }
+
+    /**
+     * What an order earns and uses on the loyalty card.
+     *   $before / $usedBefore = customer's ticks and FREE already used, before this order
+     *   $requested            = ticks typed by the cashier, or null = automatic (1 per load of a "Loyalty" service)
+     *   $useFree              = FREE rewards the cashier wants to use now ("save" mode only)
+     *   $lines                = [['unit', 'qty', 'price', 'loyalty'], ...]
+     * "save" mode: reaching a FREE box only adds to "FREE available"; the cashier decides when to use it.
+     * "auto" mode: FREE boxes reached by this order are used on this order right away.
+     * Returns ['ticks', 'auto', 'reached', 'used', 'discount', 'after', 'available' (left after this order)].
+     */
+    private function loyaltyPlan(int $before, int $usedBefore, $requested, $useFree, array $lines, float $subtotal, float $manualDiscount): array
+    {
+        $cfg   = $this->loyaltyConfig();
+        $loads = self::loadValues($lines);
+        $auto  = count($loads);   // 1 tick per load
+        if (!$cfg['enabled']) {
+            return ['ticks' => 0, 'auto' => 0, 'reached' => 0, 'used' => 0, 'discount' => 0.0, 'after' => $before, 'available' => 0];
+        }
+        $ticks = ($requested === null || $requested === '') ? $auto : max(0, min(50, (int) $requested));
+        $after = $before + $ticks;
+
+        $reached = 0;   // FREE boxes this order lands on
+        for ($t = $before + 1; $t <= $after; $t++) {
+            if (self::isFreeTick($t, $cfg)) {
+                $reached++;
+            }
+        }
+        $available = max(0, self::freeEarned($after, $cfg) - $usedBefore);   // includes what this order just earned
+        // how many FREE can one order use? one per load (free load), once for "% off", any number for "P off"
+        $maxPerOrder = $cfg['reward'] === 'percent' ? 1 : ($cfg['reward'] === 'free_load' ? count($loads) : 99);
+
+        if ($cfg['mode'] === 'auto') {
+            $use = min($reached, $available, $maxPerOrder);
+        } else {
+            $use = max(0, (int) ($useFree ?? 0));
+            if ($use > $available) {
+                throw new InvalidArgumentException("This customer has only $available FREE available.");
+            }
+            if ($use > $maxPerOrder) {
+                throw new InvalidArgumentException($cfg['reward'] === 'percent'
+                    ? 'Only 1 FREE can be used per order.'
+                    : "This order has only $maxPerOrder load(s), so at most $maxPerOrder FREE can be used.");
+            }
+        }
+
+        $discount = 0.0;
+        if ($use > 0) {
+            if ($cfg['reward'] === 'amount') {
+                $discount = $use * $cfg['value'];                              // P X off per FREE
+            } elseif ($cfg['reward'] === 'percent') {
+                $discount = $subtotal * min(100, $cfg['value']) / 100;         // X% off the order
+            } else {
+                $discount = array_sum(array_slice($loads, 0, $use));           // the cheapest load(s) are free
+            }
+        }
+        $discount = round(min($discount, max(0, $subtotal - $manualDiscount)), 2);   // never below P0
+        return ['ticks' => $ticks, 'auto' => $auto, 'reached' => $reached, 'used' => $use, 'discount' => $discount,
+                'after' => $after, 'available' => $available - $use];
+    }
+
+    /** When a wrong order is deleted, its ticks come off the customer's card and any FREE it used is given back. */
+    private function takeBackLoyaltyTicks(array $order): void
+    {
+        if ($order['loyalty_counted'] && ($order['loyalty_ticks'] > 0 || $order['loyalty_rewards'] > 0)) {
+            $t = $order['loyalty_ticks'];
+            $f = $order['loyalty_rewards'];
+            $this->db->prepare('UPDATE wh_customers SET loyalty_ticks = GREATEST(loyalty_ticks, ?) - ?, loyalty_free_used = GREATEST(loyalty_free_used, ?) - ? WHERE id = ?')
+                ->execute([$t, $t, $f, $f, $order['customer']['id']]);
+            $this->db->prepare('UPDATE wh_orders SET loyalty_counted = 0 WHERE id = ?')->execute([$order['id']]);
+        }
+    }
+
+    /** One customer's loyalty numbers for the screens. */
+    private function loyaltySummary(array $c): array
+    {
+        $cfg    = $this->loyaltyConfig();
+        $ticks  = (int) $c['loyalty_ticks'];
+        $earned = self::freeEarned($ticks, $cfg);
+        $used   = (int) $c['loyalty_free_used'];
+        return ['loyalty_ticks' => $ticks, 'loyalty_free_earned' => $earned, 'loyalty_free_used' => $used, 'loyalty_free_available' => max(0, $earned - $used)];
+    }
+
+    /**
+     * Owner / Admin: change a customer's loyalty card by hand. Payload {id, ticks? (new total) | add? (+5 / -1), free_used?, note?}.
+     * For example to copy a paper loyalty card into the system, or to fix a mistake. Written to the Activity Log.
+     */
+    private function setCustomerLoyalty(array $in): array
+    {
+        $stmt = $this->db->prepare('SELECT * FROM wh_customers WHERE id = ? AND deleted_at IS NULL');
+        $stmt->execute([(int) ($in['id'] ?? 0)]);
+        $c = $stmt->fetch(PDO::FETCH_ASSOC);
+        if (!$c) {
+            throw new InvalidArgumentException('Customer not found.');
+        }
+        return $this->applyLoyaltyChange($c, $in);
+    }
+
+    /**
+     * Owner / Admin, Loyalty Card page form: find the customer (by phone, else by exact name) or add them,
+     * then add ticks and/or set "FREE already used". Payload {name, phone, add, free_used, note}.
+     */
+    private function saveLoyaltyCard(array $in): array
+    {
+        $name  = $this->requireText($in['name'] ?? '', 'Customer name');
+        $phone = $this->cleanPhone($in['phone'] ?? '');
+        $c = false;
+        if ($phone !== '') {
+            $stmt = $this->db->prepare('SELECT * FROM wh_customers WHERE phone = ? AND deleted_at IS NULL LIMIT 1');
+            $stmt->execute([$phone]);
+            $c = $stmt->fetch(PDO::FETCH_ASSOC);
+        }
+        if (!$c) {
+            $stmt = $this->db->prepare('SELECT * FROM wh_customers WHERE name = ? AND deleted_at IS NULL ORDER BY id LIMIT 1');
+            $stmt->execute([$name]);
+            $c = $stmt->fetch(PDO::FETCH_ASSOC);
+        }
+        if (!$c) {   // new customer
+            $id   = $this->saveCustomer(['name' => $name, 'phone' => $phone])['id'];
+            $stmt = $this->db->prepare('SELECT * FROM wh_customers WHERE id = ?');
+            $stmt->execute([$id]);
+            $c = $stmt->fetch(PDO::FETCH_ASSOC);
+        }
+        return $this->applyLoyaltyChange($c, $in);
+    }
+
+    /** Shared by the two actions above: validates, saves and logs the change. */
+    private function applyLoyaltyChange(array $c, array $in): array
+    {
+        $ticks = (int) $c['loyalty_ticks'];
+        if (isset($in['ticks']) && $in['ticks'] !== '') {
+            $ticks = (int) $in['ticks'];
+        } elseif (isset($in['add']) && $in['add'] !== '') {
+            $ticks += (int) $in['add'];
+        }
+        if ($ticks < 0 || $ticks > 10000) {
+            throw new InvalidArgumentException('The total ticks must be 0 or more.');
+        }
+        $used = isset($in['free_used']) && $in['free_used'] !== '' ? (int) $in['free_used'] : (int) $c['loyalty_free_used'];
+        $earned = self::freeEarned($ticks, $this->loyaltyConfig());
+        if ($used < 0 || $used > $earned) {
+            throw new InvalidArgumentException("FREE already used must be between 0 and $earned (the FREE earned with $ticks ticks).");
+        }
+        $this->db->prepare('UPDATE wh_customers SET loyalty_ticks = ?, loyalty_free_used = ? WHERE id = ?')->execute([$ticks, $used, $c['id']]);
+        $note = mb_substr(trim((string) ($in['note'] ?? '')), 0, 100);
+        $this->record('loyalty_adjust', "{$c['name']}: ticks {$c['loyalty_ticks']} → $ticks, FREE used {$c['loyalty_free_used']} → $used" . ($note !== '' ? " · $note" : ''));
+        $c['loyalty_ticks'] = $ticks;
+        $c['loyalty_free_used'] = $used;
+        return ['id' => (int) $c['id'], 'name' => $c['name']] + $this->loyaltySummary($c);
+    }
+
+    // =====================================================================
     //  TRASH — soft-deleted records: see them, restore them, or delete forever
     // =====================================================================
 
@@ -1787,6 +2103,12 @@ class WashHubApi
                 $stmt = $this->db->prepare('UPDATE wh_customers SET deleted_at = NULL WHERE id = ? AND deleted_at IS NOT NULL');
                 $stmt->execute([$row['customer_id']]);
                 $extra = $stmt->rowCount() ? ' (its customer was restored too)' : '';
+                // give back the loyalty ticks that were taken when it was deleted
+                if (!$row['loyalty_counted'] && ($row['loyalty_ticks'] > 0 || $row['loyalty_rewards'] > 0)) {
+                    $this->db->prepare('UPDATE wh_customers SET loyalty_ticks = loyalty_ticks + ?, loyalty_free_used = loyalty_free_used + ? WHERE id = ?')
+                        ->execute([$row['loyalty_ticks'], $row['loyalty_rewards'], $row['customer_id']]);
+                    $this->db->prepare('UPDATE wh_orders SET loyalty_counted = 1 WHERE id = ?')->execute([$row['id']]);
+                }
             }
             $this->db->prepare("UPDATE $table SET deleted_at = NULL WHERE id = ?")->execute([$row['id']]);
             $this->db->commit();

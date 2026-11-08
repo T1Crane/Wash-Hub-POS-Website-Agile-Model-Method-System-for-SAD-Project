@@ -20,6 +20,7 @@
     { key: 'pos',       label: 'New Order',  icon: 'plus',      need: 'order_create' },
     { key: 'board',     label: 'Orders',     icon: 'board',     need: 'orders' },
     { key: 'customers', label: 'Customers',  icon: 'users',     need: 'customers' },
+    { key: 'loyalty',   label: 'Loyalty Card', icon: 'star',    need: 'customers' },   // ★ every customer's stamp card
     { key: 'inventory', label: 'Inventory',  icon: 'box',       need: 'inventory' },
     { key: 'reports',   label: 'Reports',    icon: 'chart',     need: 'report' },
     { key: 'users',     label: 'Users',      icon: 'shield',    need: 'users',        server: true },

@@ -15,6 +15,8 @@ A touch-friendly front-desk system for a laundry shop: take orders, print claim 
 |---|---|
 | **New Order (POS counter)** | Tap service tiles (Wash-Dry-Fold per kg, Dry Cleaning per piece, Ironing, Comforter, Express add-on). Enter weight in kg or piece counts with +/− steppers. Price is computed live. Search a customer by name/phone or quick-add one (name, phone, address/notes). Pickup or delivery, discount, notes. Payment: Cash / GCash / Card, amount received, change, and an automatic **Paid / Partial / Unpaid** status. Each order gets an auto-generated ID (`WH-YYMMDD-0001`) and an estimated ready time. |
 | **Orders board** | Kanban columns **Received → Washing → Drying → Folding/Ready → Picked Up/Delivered**. One tap moves an order to the next stage, with Undo. Overdue orders are highlighted. There's also a List view with filters. Before releasing an order with an unpaid balance, the app asks you to collect payment. Both sides can **delete** a wrong order from its detail window (with a warning if money was already paid on it). |
+| **★ Loyalty card** | Like a paper stamp card. Each load = 1 tick (services ticked **★ Loyalty** in Settings; add-ons don't count). Default card: **14 boxes, FREE at box 7 and 14**. Reaching a FREE box adds **"FREE available"**; the cashier taps **Use FREE** on any later order (or, in Settings, choose to use it right away). Reward: the cheapest load is free (or a fixed ₱ / % discount). New Order shows the card, the ticks for this order (+/− if needed, changes are logged) and "X more ticks to the next free". The ticket prints the card progress and FREE available. Deleting a wrong order takes its ticks back and returns any FREE it used. |
+| **★ Loyalty Card page** | Every customer's card on one screen: ticked boxes, FREE boxes, "N FREE available", Card #, total ticks, FREE earned / used, last visit, **View orders**. Owner / Admin: a form to add ticks (finds the customer by contact number or name, or adds them; "FREE already used"; note, e.g. "From paper card") and **Adjust ticks** on each card. All changes go to the Activity Log. |
 | **Claim ticket** | Printable 80 mm receipt: shop logo/name, order ID, **QR code + Code 39 barcode**, item breakdown, weight, totals, payments, balance, pickup terms, plus a cut-off **bag tag**. Scan or type the ticket ID in the top bar to open an order (works with USB barcode scanners). |
 | **QR order tracking** | The customer scans the ticket's QR code with their phone and sees their order's stage, ready time and balance, with no login. The link uses a secret random code per order (order IDs are easy to guess) and shows only the first name. |
 | **Login & roles** | Every user logs in. The system has two sides. **Owner / Admin**: everything. **Staff**: New Order, Orders board, Customers and payments; **no Reports and no Users page** (also no Dashboard, Inventory or Settings). The server checks every request; the menu shows only what the role may use. |
@@ -117,6 +119,7 @@ js/
     board.js           Orders board (Kanban + list)
     order.js           Order detail modal, one-tap status, payments
     customers.js       Customers
+    loyalty.js         ★ Loyalty Card page (every customer's stamp card)
     inventory.js       Inventory
     reports.js         Reports
     settings.js        Settings & price list
@@ -184,7 +187,7 @@ Code: `WashHubApi::SOFT_DELETE_TABLES`, `softDelete()`, the TRASH section (`tras
 - **No login needed:** `ping`, `login`, `logout`, `me`, `track` (QR page, needs the order's secret code)
 - **Everyone logged in:** `bootstrap` (also returns the user's permission list), `account_save`, `orders`, `order`, `order_status`
 - **Both sides (Owner / Admin and Staff):** `order_delete`, `order_create`, `order_payment`, `order_notify`, `customers`, `customer_save`
-- **Owner / Admin only:** `dashboard`, `report`, `inventory`, `inventory_save`, `inventory_adjust`, `inventory_logs`, `inventory_delete`, `service_save`, `service_delete`, `settings_save`, `users`, `user_save`, `user_delete`, `history_delete`, `customer_delete`, `inventory_logs_clear`, `trash`, `trash_restore`
+- **Owner / Admin only:** `dashboard`, `report`, `inventory`, `inventory_save`, `inventory_adjust`, `inventory_logs`, `inventory_delete`, `service_save`, `service_delete`, `settings_save`, `users`, `user_save`, `user_delete`, `history_delete`, `customer_delete`, `customer_loyalty`, `loyalty_card_save`, `inventory_logs_clear`, `trash`, `trash_restore`
 - **★ Shop Owner only** (`WashHubApi::OWNER_ONLY`): `activity_log`, `owner_transfer`, `trash_purge`. Also, `user_save` / `user_delete` on another Owner / Admin account is refused unless you are the Shop Owner.
 
 The full list lives in `WashHubApi::PERMISSIONS`. An action not on the list is refused for everyone ("default deny"). Not logged in → HTTP 401; logged in but not allowed → 403.

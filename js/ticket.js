@@ -14,6 +14,21 @@
 (function (WH) {
   'use strict';
 
+  /** Loyalty card line for the ticket, e.g. "★ Loyalty card #1: 12/14 ticks (+1 today) · 2 more to the next FREE". */
+  const loyaltyLine = (o) => {
+    const cfg = WH.loyaltyConfig();
+    if (o.loyalty_after === null || o.loyalty_after === undefined || (!o.loyalty_ticks && !cfg.enabled)) return '';
+    const { card, box } = WH.loyaltyCard(o.loyalty_after, cfg);
+    const next = WH.loyaltyToNext(o.loyalty_after, cfg);
+    // FREE still available = earned with the ticks after this order - used so far (customer's card right now)
+    const c = o.customer || {};
+    const free = Math.max(0, WH.freeEarned(Number(c.loyalty_ticks ?? o.loyalty_after) || 0, cfg) - (Number(c.loyalty_free_used) || 0));
+    return `<div class="t-sep"></div>
+      <div><b>★ Loyalty card #${card}:</b> ${box}/${cfg.size} ticks${o.loyalty_ticks ? ` (+${o.loyalty_ticks} today)` : ''}
+        ${o.loyalty_rewards ? ` · <b>${o.loyalty_rewards} FREE used</b>` : ''} · ${next} more to the next FREE
+        ${cfg.mode === 'save' && free > 0 ? `<br><b>${free} FREE available</b> for your next visit` : ''}</div>`;
+  };
+
   // ---------- Code 39 barcode ----------
   // Each character = 5 bars + 4 spaces; 1 = wide, 0 = narrow.
   // Characters are grouped by which space is wide; the bar pattern repeats per group.
@@ -109,6 +124,7 @@
         ${o.total_weight > 0 ? `<tr><td>Total weight</td><td class="r">${WH.num(o.total_weight)} kg</td></tr>` : ''}
         <tr><td>Subtotal</td><td class="r">${WH.money(o.subtotal)}</td></tr>
         ${o.discount > 0 ? `<tr><td>Discount</td><td class="r">−${WH.money(o.discount)}</td></tr>` : ''}
+        ${o.loyalty_discount > 0 ? `<tr><td>★ Loyalty FREE used</td><td class="r">−${WH.money(o.loyalty_discount)}</td></tr>` : ''}
         <tr class="t-total"><td>TOTAL</td><td class="r">${WH.money(o.total)}</td></tr>
         ${payments}
         ${opts.change > 0 ? `<tr><td>Change</td><td class="r">${WH.money(opts.change)}</td></tr>` : ''}
@@ -116,6 +132,7 @@
       </table>
       <div class="t-center" style="margin-top:6px"><span class="t-status">${WH.payLabel(o.payment_status).toUpperCase()}</span></div>
       ${o.notes ? `<div class="t-sep"></div><div><b>Notes:</b> ${h(o.notes)}</div>` : ''}
+      ${loyaltyLine(o)}
       <div class="t-sep"></div>
       <div class="t-terms"><b>Pickup terms:</b> ${h(s.pickup_terms)}</div>
       <div class="t-center" style="margin-top:8px">Thank you for choosing ${h(s.shop_name)}!</div>

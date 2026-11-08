@@ -81,7 +81,16 @@
     pickup_terms: 'Present this claim ticket when picking up. Items unclaimed after 30 days will be donated. Gap Wash Hub is not liable for color bleeding, shrinkage, or items left in pockets. Please check your items before leaving the counter.',
     sms_template: 'Hi {name}! Your laundry ({code}) at {shop} is ready for pickup. Balance due: {balance}. Thank you!',
     public_url: '',
+    // Loyalty card (same defaults as WashHubApi::DEFAULT_SETTINGS)
+    loyalty_enabled: '1',
+    loyalty_card_size: '14',
+    loyalty_free_every: '7',
+    loyalty_reward: 'free_load',
+    loyalty_reward_value: '0',
+    loyalty_mode: 'save',
   };
+  /** Starter services that do NOT earn loyalty ticks (add-ons) */
+  const NO_LOYALTY = ['Addt Detergent', 'Addt Fabcon', 'Over 8 kilos (Wash & Dry)', 'Over 8 kilos (Wash or Dry)', 'Blue Plastic'];
   /** Random 32-character secret for the QR tracking link (same format as the PHP version) */
   const newToken = () => Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) => b.toString(16).padStart(2, '0')).join('');
 
@@ -105,6 +114,8 @@
         try { localStorage.removeItem(KEY); } catch (e) { /* ignore */ }
         this.db = this.seed();
       }
+      // Demo data saved before the loyalty card existed: add the "earns ticks" flag
+      this.db.services.forEach((s) => { if (s.loyalty === undefined) s.loyalty = !NO_LOYALTY.includes(s.name); });
       return this.db;
     },
     save() {
@@ -143,7 +154,7 @@
         ['Over 8 kilos (Wash or Dry)', 'pc', 20, 24, false, 'pink'],
         ['Blue Plastic', 'pc', 12, 24, false, 'slate'],
       ].forEach(([name, unit, price, turnaround_hours, is_express, color], i) =>
-        this.db.services.push({ id: this.nextId('services'), name, unit, price, turnaround_hours, is_express, color, active: true, sort_order: i + 1 }));
+        this.db.services.push({ id: this.nextId('services'), name, unit, price, turnaround_hours, is_express, color, active: true, sort_order: i + 1, loyalty: !NO_LOYALTY.includes(name) }));
       const now = new Date().toISOString();
       [
         ['Liquid Detergent', 'L', 20, 5, 95], ['Fabric Conditioner', 'L', 15, 5, 80], ['Color-safe Bleach', 'L', 4, 3, 70],
@@ -212,7 +223,24 @@
           };
         },
         order_notify: () => { const o = this.find(p.id); o.notified_at = iso(new Date()); return this.order(o.id); },
-        order_delete: () => { const o = this.find(p.id); this.db.orders = this.db.orders.filter((x) => x !== o); return { deleted: o.code }; },
+        order_delete: () => {
+          const o = this.find(p.id);
+          // a wrong order shouldn't count on the loyalty card
+          const c = this.db.customers.find((x) => x.id === o.customer_id);
+          if (c && o.loyalty_ticks) c.loyalty_ticks = Math.max(0, (c.loyalty_ticks || 0) - o.loyalty_ticks);
+          if (c && o.loyalty_rewards) c.loyalty_free_used = Math.max(0, (c.loyalty_free_used || 0) - o.loyalty_rewards);   // FREE used is given back
+          this.db.orders = this.db.orders.filter((x) => x !== o);
+          return { deleted: o.code };
+        },
+        customer_loyalty: () => this.applyLoyalty(this.db.customers.find((x) => x.id === Number(p.id)) || fail('Customer not found.'), p),
+        // Loyalty Card page form: find by phone (or exact name), or add the customer
+        loyalty_card_save: () => {
+          const name = String(p.name || '').trim() || fail('Customer name is required.');
+          const phone = cleanPhone(p.phone);
+          let c = (phone && this.db.customers.find((x) => x.phone === phone)) || this.db.customers.find((x) => x.name === name);
+          if (!c) c = this.db.customers.find((x) => x.id === this.saveCustomer({ name, phone }).id);
+          return this.applyLoyalty(c, p);
+        },
         dashboard: () => this.dashboard(),
         report: () => this.report(p),
         inventory: () => this.inventory(),
@@ -262,6 +290,28 @@
       return clone(result);
     },
 
+    // ----- loyalty card (same rules as WashHubApi) -----
+    loyaltyCfg() { return WH.loyaltyConfig({ ...DEFAULT_SETTINGS, ...this.db.settings }); },
+    loyaltySummary(c) {
+      const ticks = c.loyalty_ticks || 0;
+      const earned = WH.freeEarned(ticks, this.loyaltyCfg());
+      const used = c.loyalty_free_used || 0;
+      return { loyalty_ticks: ticks, loyalty_free_earned: earned, loyalty_free_used: used, loyalty_free_available: Math.max(0, earned - used) };
+    },
+    /** Owner / Admin: change a card by hand. p = {ticks? | add?, free_used?} */
+    applyLoyalty(c, p) {
+      let ticks = c.loyalty_ticks || 0;
+      if (p.ticks !== undefined && p.ticks !== '') ticks = parseInt(p.ticks, 10) || 0;
+      else if (p.add !== undefined && p.add !== '') ticks += parseInt(p.add, 10) || 0;
+      if (ticks < 0 || ticks > 10000) fail('The total ticks must be 0 or more.');
+      const earned = WH.freeEarned(ticks, this.loyaltyCfg());
+      const used = p.free_used !== undefined && p.free_used !== '' ? parseInt(p.free_used, 10) || 0 : (c.loyalty_free_used || 0);
+      if (used < 0 || used > earned) fail(`FREE already used must be between 0 and ${earned} (the FREE earned with ${ticks} ticks).`);
+      c.loyalty_ticks = ticks;
+      c.loyalty_free_used = used;
+      return { id: c.id, name: c.name, ...this.loyaltySummary(c) };
+    },
+
     // ----- services / customers -----
     services() {
       return [...this.db.services].sort((a, b) => a.sort_order - b.sort_order || a.id - b.id);
@@ -277,6 +327,7 @@
         color: String(p.color || 'blue').replace(/[^a-z]/g, '') || 'blue',
         active: p.active === undefined ? true : !!p.active,
         sort_order: parseInt(p.sort_order, 10) || 0,
+        loyalty: p.loyalty === undefined ? true : !!p.loyalty,
       };
       const existing = this.db.services.find((s) => s.id === Number(p.id));
       if (existing) Object.assign(existing, row);
@@ -288,10 +339,11 @@
       const qPhone = q.replace(/\s+/g, '');
       return this.db.customers
         .filter((c) => !q || c.name.toLowerCase().includes(q) || (qPhone && c.phone.includes(qPhone)))
+        .filter((c) => !p.loyalty_only || (c.loyalty_ticks || 0) > 0 || (c.loyalty_free_used || 0) > 0)
         .map((c) => {
           const orders = this.db.orders.filter((o) => o.customer_id === c.id);
           const last = orders.reduce((m, o) => (o.created_at > m ? o.created_at : m), '');
-          return { ...c, order_count: orders.length, last_order_at: last || null, total_spent: r2(orders.reduce((s, o) => s + o.total, 0)) };
+          return { ...c, ...this.loyaltySummary(c), order_count: orders.length, last_order_at: last || null, total_spent: r2(orders.reduce((s, o) => s + o.total, 0)) };
         })
         .sort((a, b) => String(b.last_order_at || '').localeCompare(String(a.last_order_at || '')) || a.name.localeCompare(b.name))
         .slice(0, Number(p.limit) || 100);
@@ -306,7 +358,7 @@
       let c = this.db.customers.find((x) => x.id === Number(p.id));
       if (c) Object.assign(c, row);
       else this.db.customers.push((c = { id: this.nextId('customers'), ...row, created_at: iso(at) }));
-      return { id: c.id, name: c.name, phone: c.phone, address: c.address, notes: c.notes };
+      return { id: c.id, name: c.name, phone: c.phone, address: c.address, notes: c.notes, ...this.loyaltySummary(c) };
     },
     resolveCustomer(c, at) {
       if (c.id && this.db.customers.some((x) => x.id === Number(c.id))) return Number(c.id);
@@ -322,7 +374,7 @@
     out(o) {
       const c = this.db.customers.find((x) => x.id === o.customer_id) || {};
       const { customer_id, history, ...rest } = o;
-      return { ...rest, balance: r2(o.total - o.amount_paid), customer: { id: c.id, name: c.name, phone: c.phone, address: c.address, notes: c.notes } };
+      return { ...rest, balance: r2(o.total - o.amount_paid), customer: { id: c.id, name: c.name, phone: c.phone, address: c.address, notes: c.notes, loyalty_ticks: c.loyalty_ticks || 0, loyalty_free_used: c.loyalty_free_used || 0 } };
     },
     order(id) {
       const o = this.find(id);
@@ -370,7 +422,26 @@
       if (express) hours = express.turnaround_hours;
       subtotal = r2(subtotal);
       const discount = Math.min(Math.max(r2(p.discount), 0), subtotal);
-      const total = r2(subtotal - discount);
+
+      // Loyalty card (same rules as the server: WH.loyaltyPlan in utils.js)
+      const customerId = this.resolveCustomer(p.customer || {}, at);
+      const cust = this.db.customers.find((x) => x.id === customerId);
+      const cfg = this.loyaltyCfg();
+      const loyaltyLines = lines.map((l) => {
+        const s = this.db.services.find((x) => x.id === l.service_id);
+        return { unit: l.unit, qty: l.qty, price: l.unit_price, loyalty: s ? s.loyalty !== false : true };
+      });
+      const auto = WH.loyaltyAutoTicks(loyaltyLines);
+      const asked = p.loyalty_ticks === null || p.loyalty_ticks === undefined || p.loyalty_ticks === '' ? auto : Math.max(0, Math.min(50, parseInt(p.loyalty_ticks, 10) || 0));
+      const plan = WH.loyaltyPlan({ cfg, before: cust.loyalty_ticks || 0, usedBefore: cust.loyalty_free_used || 0, ticks: cfg.enabled ? asked : 0,
+        useFree: p.loyalty_use_free, lines: loyaltyLines, subtotal, manualDiscount: discount });
+      if (cfg.mode === 'save' && (Number(p.loyalty_use_free) || 0) > plan.used) {
+        fail(plan.maxUse ? `At most ${plan.maxUse} FREE can be used on this order.` : 'This customer has no FREE available.');
+      }
+      cust.loyalty_ticks = plan.after;
+      cust.loyalty_free_used = (cust.loyalty_free_used || 0) + plan.used;
+
+      const total = r2(subtotal - discount - plan.discount);
       const paid = Math.min(Math.max(r2(p.payment && p.payment.amount), 0), total);
       const method = ['cash', 'gcash', 'card'].includes(p.payment && p.payment.method) ? p.payment.method : 'cash';
 
@@ -380,7 +451,11 @@
         id: this.nextId('orders'),
         code: prefix + String(lastNo + 1).padStart(4, '0'),
         track_token: newToken(),
-        customer_id: this.resolveCustomer(p.customer || {}, at),
+        customer_id: customerId,
+        loyalty_ticks: plan.ticks,
+        loyalty_rewards: plan.used,   // FREE used on this order
+        loyalty_discount: plan.discount,
+        loyalty_after: plan.after,
         status: 'received',
         fulfillment: p.fulfillment === 'delivery' ? 'delivery' : 'pickup',
         is_express: !!express,

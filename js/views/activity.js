@@ -29,6 +29,8 @@
     service_delete:       ['Deleted service',       'low',     'deletions'],
     inventory_delete:     ['Deleted supply item',   'low',     'deletions'],
     inventory_logs_clear: ['Cleared stock log',     'low',     'deletions'],
+    loyalty_override:     ['Loyalty ticks changed', 'partial', 'accounts'],
+    loyalty_adjust:       ['Loyalty card adjusted', 'partial', 'accounts'],
     trash_restore:        ['Restored from Trash',   'ok',      'deletions'],
     trash_purge:          ['Deleted forever',       'overdue', 'deletions'],
   };

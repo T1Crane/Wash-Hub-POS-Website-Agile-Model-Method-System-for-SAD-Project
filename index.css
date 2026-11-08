@@ -319,6 +319,34 @@ table.table { width: 100%; border-collapse: collapse; font-size: .94rem; }
 .stepper button:hover { background: var(--primary-soft); }
 .stepper input { width: 78px; border: 0; border-radius: 0; text-align: center; font-weight: 800; font-size: 1.1rem; padding: 0 4px; min-height: 48px; box-shadow: none !important; }
 .stepper .u { padding-right: 10px; font-weight: 700; color: var(--ink-2); font-size: .9rem; }
+.stepper.sm button { width: 38px; height: 38px; }
+
+/* Loyalty card (New Order): like a paper stamp card, every Nth box is FREE */
+.loyal { border: 1px solid var(--line); border-left: 4px solid #e2b400; border-radius: var(--radius-sm); padding: 10px 12px; margin-bottom: 12px; background: var(--surface-2); }
+.loyal-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.loyal-n { min-width: 34px; text-align: center; font-weight: 800; font-size: 1.05rem; }
+.loyal-grid { display: grid; gap: 5px; margin-bottom: 6px; }
+.loyal-box { display: flex; align-items: center; justify-content: center; height: 30px; border-radius: 6px; font-size: .78rem; font-weight: 800;
+  border: 1.5px solid var(--line-strong); background: var(--surface); color: var(--ink-2); }
+.loyal-box.done { background: var(--primary); border-color: var(--primary); color: #fff; }            /* ticked before */
+.loyal-box.now  { border: 2px dashed var(--primary); background: var(--primary-soft); color: var(--primary); } /* ticked by this order */
+.loyal-box.free { background: #fff4c2; border-color: #e2b400; color: #7a5200; font-size: .66rem; }
+.loyal-box.free.done { background: #e2b400; color: #fff; }
+.loyal-box.free.now  { border: 2px dashed #b38b00; background: #ffe066; color: #5c3d00; }
+.loyal-use { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 4px 0 6px; }
+.stepper button:disabled { opacity: .35; cursor: not-allowed; }
+.loyal-win { padding: 8px 10px; border-radius: 8px; background: var(--success-soft); color: var(--success); font-weight: 700; font-size: .9rem; }
+/* Loyalty Card page */
+.loyal-form { display: grid; grid-template-columns: 1.4fr 1.1fr .8fr .8fr 1.2fr auto; gap: 10px; align-items: end; }
+@media (max-width: 1000px) { .loyal-form { grid-template-columns: 1fr 1fr; } }
+.loyal-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 14px; }
+.loyal-card { border-left: 4px solid var(--primary); }
+.loyal-card-top { display: flex; justify-content: space-between; gap: 10px; align-items: flex-start; }
+.loyal-name { font-size: 1.15rem; font-weight: 800; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.loyal-stats { display: grid; grid-template-columns: 1fr auto; gap: 4px 12px; margin: 0; font-size: .9rem; }
+.loyal-stats dt { color: var(--muted); }
+.loyal-stats dd { margin: 0; text-align: right; font-weight: 700; }
+.link { background: none; border: 0; padding: 0; color: var(--primary); text-decoration: underline; cursor: pointer; font: inherit; }
 .line.invalid .stepper { border-color: var(--danger); box-shadow: 0 0 0 3px var(--danger-soft); }
 
 .cust-results { border: 1px solid var(--line); border-radius: 12px; margin-top: 8px; max-height: 260px; overflow: auto; background: var(--surface); }
