@@ -27,7 +27,8 @@ A touch-friendly front-desk system for a laundry shop: take orders, print claim 
 | **Inventory** | Supplies (detergent, fabric conditioner, bags, hangers…), stock level meter, reorder level, restock/use adjustments with a movement log. Owner / Admin can **delete** items that aren't used anymore (the trash button on the row). |
 | **Reports** | Any date range: amount collected vs billed, orders, kg processed, revenue per service, payment methods. Print or export to CSV. |
 | **Settings** | Shop details printed on tickets, pickup terms, SMS template, price list (add, edit, switch off or **delete** services: price, unit, turnaround hours, express flag, tile color). |
-| **History cleanup** (Owner / Admin) | **Settings → History cleanup:** delete finished orders between two dates (checks the count first). **Customers:** delete a customer with all their orders. **Inventory:** clear the stock movement log (stock levels stay). |
+| **History cleanup** (Owner / Admin) | **Settings → History cleanup:** delete finished orders between two dates (checks the count first). **Customers:** delete a customer with all their orders. **Inventory:** clear the stock movement log (stock levels stay). All of these are soft deletes (see below). |
+| **Trash** (Owner / Admin) | Everything that was deleted (orders, customers, services, supplies, stock records, user accounts). **Restore** brings it back. **Delete forever** removes it for good (★ Shop Owner only). |
 
 ---
 
@@ -121,6 +122,7 @@ js/
     settings.js        Settings & price list
     users.js           User accounts (Owner / Admin only) + ★ Shop Owner protection
     activity.js        Activity Log (★ Shop Owner only)
+    trash.js           Trash: restore or delete forever (soft delete)
     account.js         My Account (every user)
 api.php                JSON API for XAMPP  (api.php?action=...): login session + permission check
 .htaccess              Tells the browser to always check for the newest JS/CSS
@@ -147,6 +149,34 @@ laravel/               Files that make it run inside Laravel (+ install script)
 | `wh_users` | Login accounts: username, full name, **hashed** password (never the real one), role (`admin` = Owner / Admin side, `staff` = Staff side), `is_owner` (the one ★ Shop Owner), active, last login |
 | `wh_activity_logs` | Activity log: who (name copied in, so it survives account deletion), action, details, time |
 
+### Soft delete (how deleting works)
+
+Nothing is removed from the database when someone clicks **Delete**. Six tables have a `deleted_at` column
+(`wh_orders`, `wh_customers`, `wh_services`, `wh_inventory`, `wh_inventory_logs`, `wh_users`):
+
+| `deleted_at` | Meaning |
+|---|---|
+| `NULL` | Active: shows on the screens and counts in reports |
+| a date and time | Deleted: hidden everywhere, but the row is still in the database (it is in the **Trash**) |
+
+| Action | SQL it runs |
+|---|---|
+| Delete | `UPDATE wh_orders SET deleted_at = NOW() WHERE id = 5` |
+| Every screen / report | `... WHERE deleted_at IS NULL` |
+| Restore (Trash) | `UPDATE wh_orders SET deleted_at = NULL WHERE id = 5` |
+| Delete forever (Trash, ★ Shop Owner only) | `DELETE FROM wh_orders WHERE id = 5 AND deleted_at IS NOT NULL` |
+
+Details:
+- A deleted order keeps its items, payments and status history; its payments simply stop counting in Reports and the Dashboard. Restoring it puts them back.
+- Deleting a customer gives the customer and their orders the **same** `deleted_at` time, so restoring the customer brings back exactly those orders. Restoring an order whose customer is in the Trash restores the customer too.
+- A deleted user can't log in, and their username stays reserved (so the account can be restored).
+- Order codes are never reused: the next code also counts orders in the Trash.
+- Restores and Delete forever are written to the Activity Log.
+- Demo mode (no MySQL) has no Trash; there, delete still removes the data for real.
+- In Laravel, the same idea is built in: `$table->softDeletes()` in a migration and `use SoftDeletes;` in a model.
+
+Code: `WashHubApi::SOFT_DELETE_TABLES`, `softDelete()`, the TRASH section (`trash()`, `restoreFromTrash()`, `purgeFromTrash()`), and `js/views/trash.js`.
+
 ### API actions (for documentation / testing)
 
 `POST api.php?action=<name>` with a JSON body. Response: `{"ok": true, "data": …}` or `{"ok": false, "error": "…"}`.
@@ -154,8 +184,8 @@ laravel/               Files that make it run inside Laravel (+ install script)
 - **No login needed:** `ping`, `login`, `logout`, `me`, `track` (QR page, needs the order's secret code)
 - **Everyone logged in:** `bootstrap` (also returns the user's permission list), `account_save`, `orders`, `order`, `order_status`
 - **Both sides (Owner / Admin and Staff):** `order_delete`, `order_create`, `order_payment`, `order_notify`, `customers`, `customer_save`
-- **Owner / Admin only:** `dashboard`, `report`, `inventory`, `inventory_save`, `inventory_adjust`, `inventory_logs`, `inventory_delete`, `service_save`, `service_delete`, `settings_save`, `users`, `user_save`, `user_delete`, `history_delete`, `customer_delete`, `inventory_logs_clear`
-- **★ Shop Owner only** (`WashHubApi::OWNER_ONLY`): `activity_log`, `owner_transfer`. Also, `user_save` / `user_delete` on another Owner / Admin account is refused unless you are the Shop Owner.
+- **Owner / Admin only:** `dashboard`, `report`, `inventory`, `inventory_save`, `inventory_adjust`, `inventory_logs`, `inventory_delete`, `service_save`, `service_delete`, `settings_save`, `users`, `user_save`, `user_delete`, `history_delete`, `customer_delete`, `inventory_logs_clear`, `trash`, `trash_restore`
+- **★ Shop Owner only** (`WashHubApi::OWNER_ONLY`): `activity_log`, `owner_transfer`, `trash_purge`. Also, `user_save` / `user_delete` on another Owner / Admin account is refused unless you are the Shop Owner.
 
 The full list lives in `WashHubApi::PERMISSIONS`. An action not on the list is refused for everyone ("default deny"). Not logged in → HTTP 401; logged in but not allowed → 403.
 

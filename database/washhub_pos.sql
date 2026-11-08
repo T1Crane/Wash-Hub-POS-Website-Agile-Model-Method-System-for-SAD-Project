@@ -25,7 +25,8 @@ CREATE TABLE IF NOT EXISTS wh_services (
     is_express       TINYINT(1) NOT NULL DEFAULT 0,
     color            VARCHAR(20) NOT NULL DEFAULT 'blue',
     active           TINYINT(1) NOT NULL DEFAULT 1,
-    sort_order       INT NOT NULL DEFAULT 0
+    sort_order       INT NOT NULL DEFAULT 0,
+    deleted_at       DATETIME NULL DEFAULT NULL   -- soft delete: NULL = active, a date = in the Trash
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS wh_customers (
@@ -35,6 +36,7 @@ CREATE TABLE IF NOT EXISTS wh_customers (
     address    VARCHAR(255) NOT NULL DEFAULT '',
     notes      VARCHAR(255) NOT NULL DEFAULT '',
     created_at DATETIME NOT NULL,
+    deleted_at DATETIME NULL DEFAULT NULL,   -- soft delete
     KEY idx_customer_phone (phone),
     KEY idx_customer_name (name)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
@@ -59,6 +61,7 @@ CREATE TABLE IF NOT EXISTS wh_orders (
     status_updated_at DATETIME NOT NULL,
     completed_at      DATETIME NULL,
     notified_at       DATETIME NULL,
+    deleted_at        DATETIME NULL DEFAULT NULL,   -- soft delete
     KEY idx_order_status (status),
     KEY idx_order_created (created_at),
     CONSTRAINT fk_order_customer FOREIGN KEY (customer_id) REFERENCES wh_customers(id)
@@ -101,7 +104,8 @@ CREATE TABLE IF NOT EXISTS wh_inventory (
     stock         DECIMAL(10,2) NOT NULL DEFAULT 0,
     reorder_level DECIMAL(10,2) NOT NULL DEFAULT 0,
     cost          DECIMAL(10,2) NOT NULL DEFAULT 0,
-    updated_at    DATETIME NOT NULL
+    updated_at    DATETIME NOT NULL,
+    deleted_at    DATETIME NULL DEFAULT NULL   -- soft delete
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS wh_inventory_logs (
@@ -110,6 +114,7 @@ CREATE TABLE IF NOT EXISTS wh_inventory_logs (
     change_qty DECIMAL(10,2) NOT NULL,
     reason     VARCHAR(120) NOT NULL DEFAULT '',
     created_at DATETIME NOT NULL,
+    deleted_at DATETIME NULL DEFAULT NULL,   -- soft delete
     CONSTRAINT fk_invlog_item FOREIGN KEY (item_id) REFERENCES wh_inventory(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -122,7 +127,8 @@ CREATE TABLE IF NOT EXISTS wh_users (
     is_owner      TINYINT(1) NOT NULL DEFAULT 0,   -- 1 = the ★ Shop Owner (exactly one account)
     active        TINYINT(1) NOT NULL DEFAULT 1,
     created_at    DATETIME NOT NULL,
-    last_login_at DATETIME NULL
+    last_login_at DATETIME NULL,
+    deleted_at    DATETIME NULL DEFAULT NULL   -- soft delete
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- Activity log: who did what and when (no foreign key, so records stay after a user is deleted)

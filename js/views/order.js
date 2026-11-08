@@ -177,13 +177,14 @@
     on('ticket', () => WH.showTicket(order));
     on('notify', () => WH.notifyCustomer(order, () => { WH.refresh(); reopen(); }));
     on('delete', async () => {
-      // Asks first: deleting can't be undone, and payments on this order leave the sales reports too
+      // Asks first: payments on this order leave the sales reports while it is in the Trash
       const ok = await WH.confirm(
         `Delete order ${order.code}?`,
-        `This permanently removes <b>${h(order.code)}</b> for <b>${h(order.customer.name)}</b> (${h(WH.itemsSummary(order.items))}, total ${WH.money(order.total)}).
-         ${order.amount_paid > 0 ? `<br><br><b style="color:var(--danger)">${WH.money(order.amount_paid)} already paid on this order will also be removed from the sales reports.</b> Refund the customer if needed.` : ''}
-         <br><br>The customer's profile is kept. To fix a mistake, delete this order and create a new one.`,
-        'Delete permanently'
+        `This removes <b>${h(order.code)}</b> for <b>${h(order.customer.name)}</b> (${h(WH.itemsSummary(order.items))}, total ${WH.money(order.total)}).
+         ${order.amount_paid > 0 ? `<br><br><b style="color:var(--danger)">${WH.money(order.amount_paid)} already paid on this order will also be left out of the sales reports.</b> Refund the customer if needed.` : ''}
+         <br><br>The customer's profile is kept. To fix a mistake, delete this order and create a new one.
+         <br><br>${WH.trashNote()}`,
+        'Delete order'
       );
       if (!ok) return;
       try {

@@ -59,14 +59,14 @@
     role.addEventListener('change', showAbout);
     showAbout();
 
-    // Delete: asks first, because it can't be undone. Disabling keeps the account for later instead.
+    // Delete: asks first. The account goes to the Trash (soft delete) and can't log in; it can be restored.
     const del = m.el.querySelector('[data-act="delete"]');
     if (del) del.onclick = async () => {
       const ok = await WH.confirm(
         'Delete this account?',
-        `<b>${h(u.full_name)}</b> (${h(u.username)}) will be removed permanently and can no longer log in. Orders and payments are not affected.<br><br>
-         Tip: if they might come back, untick <b>Account active</b> instead.`,
-        'Delete permanently'
+        `<b>${h(u.full_name)}</b> (${h(u.username)}) will be removed and can no longer log in. Orders and payments are not affected.<br><br>
+         ${WH.trashNote()}`,
+        'Delete account'
       );
       if (!ok) return;
       try {

@@ -248,6 +248,15 @@ window.WH = window.WH || {};
     }));
   });
 
+  /**
+   * SOFT DELETE note for delete confirmations. With MySQL, deleted records go to the Trash
+   * (deleted_at is set, nothing is removed) and an Owner / Admin can restore them.
+   * Demo mode (no server) has no Trash, so there it really deletes.
+   */
+  WH.trashNote = () => (WH.store && WH.store.mode === 'mysql'
+    ? `${WH.icon('trash')} It moves to the <b>Trash</b>. An Owner / Admin can restore it from there.`
+    : '<b>Demo mode:</b> this deletes it for real (the Trash needs the MySQL server).');
+
   WH.confirm = (title, message, okLabel = 'Confirm') =>
     WH.choice(title, message, [{ label: 'Cancel', value: false }, { label: okLabel, value: true, cls: 'btn-primary' }]).then(Boolean);
 

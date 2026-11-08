@@ -62,10 +62,10 @@
       const unfinished = orders.filter((o) => o.status !== 'completed').length;
       const paid = orders.reduce((s, o) => s + o.amount_paid, 0);
       const ok = await WH.confirm(`Delete ${c.name}?`,
-        `This permanently deletes <b>${h(c.name)}</b> and <b>all ${orders.length} order${orders.length === 1 ? '' : 's'}</b> in their history${paid > 0 ? `, including ${WH.money(paid)} in payments (Reports will change)` : ''}.
+        `This deletes <b>${h(c.name)}</b> and <b>all ${orders.length} order${orders.length === 1 ? '' : 's'}</b> in their history${paid > 0 ? `, including ${WH.money(paid)} in payments (Reports will change)` : ''}.
          ${unfinished ? `<br><br><b style="color:var(--danger)">${unfinished} of these orders are not finished yet</b> — make sure the laundry was returned first.` : ''}
-         <br><br>This cannot be undone.`,
-        'Delete permanently');
+         <br><br>${WH.trashNote()} Restoring the customer brings these orders back too.`,
+        'Delete customer');
       if (!ok) return;
       try {
         const r = await WH.api('customer_delete', { id: c.id });

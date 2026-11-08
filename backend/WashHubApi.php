@@ -39,6 +39,8 @@ class WashHubApi
 
     /** Order workflow, in order. "completed" means Picked Up / Delivered. */
     public const STATUSES = ['received', 'washing', 'drying', 'ready', 'completed'];
+    /** Status names as shown on screen (used in the Trash list). */
+    private const STATUS_NAMES = ['received' => 'Received', 'washing' => 'Washing', 'drying' => 'Drying', 'ready' => 'Folding / Ready', 'completed' => 'Picked Up / Delivered'];
 
     /** Accepted payment methods. */
     public const PAYMENT_METHODS = ['cash', 'gcash', 'card'];
@@ -84,13 +86,40 @@ class WashHubApi
         // Shop Owner only (an Owner / Admin account that also has the ★ Shop Owner mark, see OWNER_ONLY)
         'activity_log'     => ['admin'],  // who did what and when
         'owner_transfer'   => ['admin'],  // hand the Shop Owner mark to another Owner / Admin
+        // Trash (soft-deleted records)
+        'trash'            => ['admin'],  // see what was deleted
+        'trash_restore'    => ['admin'],  // bring it back
+        'trash_purge'      => ['admin'],  // delete forever (Shop Owner only, see OWNER_ONLY)
     ];
 
     /**
      * Actions that need the ★ Shop Owner mark on top of the Owner / Admin role.
      * There is exactly one Shop Owner (wh_users.is_owner = 1). Other admins can't use these.
      */
-    public const OWNER_ONLY = ['activity_log', 'owner_transfer'];
+    public const OWNER_ONLY = ['activity_log', 'owner_transfer', 'trash_purge'];
+
+    /**
+     * SOFT DELETE: these tables have a deleted_at column.
+     *   deleted_at = NULL  -> the row is active and shows on the screens
+     *   deleted_at = date  -> the row was "deleted": it is hidden but still in the database (Trash)
+     * Deleting = UPDATE ... SET deleted_at = NOW()     Restoring = UPDATE ... SET deleted_at = NULL
+     * Every screen reads only rows WHERE deleted_at IS NULL.
+     * A real DELETE happens only with "Delete forever" in the Trash (Shop Owner only).
+     */
+    public const SOFT_DELETE_TABLES = ['wh_services', 'wh_customers', 'wh_orders', 'wh_inventory', 'wh_inventory_logs', 'wh_users'];
+
+    /** Payments that count in sales: only those whose order is NOT in the Trash. Used in FROM ... as alias "p". */
+    private const LIVE_PAYMENTS = 'wh_payments p JOIN wh_orders po ON po.id = p.order_id AND po.deleted_at IS NULL';
+
+    /** Trash tabs: type name used by the API => its table. */
+    private const TRASH_TYPES = [
+        'orders'     => 'wh_orders',
+        'customers'  => 'wh_customers',
+        'services'   => 'wh_services',
+        'inventory'  => 'wh_inventory',
+        'stock_logs' => 'wh_inventory_logs',
+        'users'      => 'wh_users',
+    ];
 
     /** True if this role may run this action. $role = null means nobody is logged in. */
     public static function allowed(?string $role, string $action): bool
@@ -206,6 +235,10 @@ class WashHubApi
             case 'inventory_adjust': return $this->adjustInventory($in);
             case 'inventory_logs':   return $this->inventoryLogs($in);
             case 'inventory_delete': return $this->deleteInventoryItem((int) ($in['id'] ?? 0));
+            // --- trash (soft delete) ---
+            case 'trash':            return $this->trash();
+            case 'trash_restore':    return $this->restoreFromTrash($in);
+            case 'trash_purge':      return $this->purgeFromTrash($in);
         }
         throw new InvalidArgumentException("Unknown action \"$action\".");
     }
@@ -235,7 +268,8 @@ class WashHubApi
                 is_express       TINYINT(1) NOT NULL DEFAULT 0,
                 color            VARCHAR(20) NOT NULL DEFAULT 'blue',
                 active           TINYINT(1) NOT NULL DEFAULT 1,
-                sort_order       INT NOT NULL DEFAULT 0
+                sort_order       INT NOT NULL DEFAULT 0,
+                deleted_at       DATETIME NULL DEFAULT NULL   -- soft delete: NULL = active, date = in Trash
             ) $opts",
 
             "CREATE TABLE IF NOT EXISTS wh_customers (
@@ -245,6 +279,7 @@ class WashHubApi
                 address    VARCHAR(255) NOT NULL DEFAULT '',
                 notes      VARCHAR(255) NOT NULL DEFAULT '',
                 created_at DATETIME NOT NULL,
+                deleted_at DATETIME NULL DEFAULT NULL,   -- soft delete
                 KEY idx_customer_phone (phone),
                 KEY idx_customer_name (name)
             ) $opts",
@@ -270,6 +305,7 @@ class WashHubApi
                 status_updated_at DATETIME NOT NULL,
                 completed_at      DATETIME NULL,
                 notified_at       DATETIME NULL,
+                deleted_at        DATETIME NULL DEFAULT NULL,   -- soft delete
                 KEY idx_order_status (status),
                 KEY idx_order_created (created_at),
                 CONSTRAINT fk_order_customer FOREIGN KEY (customer_id) REFERENCES wh_customers(id)
@@ -316,7 +352,8 @@ class WashHubApi
                 stock         DECIMAL(10,2) NOT NULL DEFAULT 0,
                 reorder_level DECIMAL(10,2) NOT NULL DEFAULT 0,
                 cost          DECIMAL(10,2) NOT NULL DEFAULT 0,
-                updated_at    DATETIME NOT NULL
+                updated_at    DATETIME NOT NULL,
+                deleted_at    DATETIME NULL DEFAULT NULL   -- soft delete
             ) $opts",
 
             // Stock movements: positive = restock, negative = used/damaged
@@ -326,6 +363,7 @@ class WashHubApi
                 change_qty DECIMAL(10,2) NOT NULL,
                 reason     VARCHAR(120) NOT NULL DEFAULT '',
                 created_at DATETIME NOT NULL,
+                deleted_at DATETIME NULL DEFAULT NULL,   -- soft delete (Clear history button)
                 CONSTRAINT fk_invlog_item FOREIGN KEY (item_id) REFERENCES wh_inventory(id) ON DELETE CASCADE
             ) $opts",
                 // Staff accounts that can log in. "role" decides what each person may do.
@@ -338,7 +376,8 @@ class WashHubApi
                 is_owner      TINYINT(1) NOT NULL DEFAULT 0,   -- 1 = the ★ Shop Owner (exactly one account)
                 active        TINYINT(1) NOT NULL DEFAULT 1,
                 created_at    DATETIME NOT NULL,
-                last_login_at DATETIME NULL
+                last_login_at DATETIME NULL,
+                deleted_at    DATETIME NULL DEFAULT NULL   -- soft delete (a deleted account can't log in)
             ) $opts",
 
             // Activity log: who did what and when (logins, account changes, deletions).
@@ -362,6 +401,13 @@ class WashHubApi
     {
         foreach (self::schema() as $sql) {
             $this->db->exec($sql);
+        }
+
+        // Upgrade for databases made before soft delete existed: add the deleted_at column
+        foreach (self::SOFT_DELETE_TABLES as $table) {
+            if (!$this->db->query("SHOW COLUMNS FROM $table LIKE 'deleted_at'")->fetch()) {
+                $this->db->exec("ALTER TABLE $table ADD COLUMN deleted_at DATETIME NULL DEFAULT NULL");
+            }
         }
 
         // Upgrade for databases made before the QR tracking link existed:
@@ -453,7 +499,7 @@ class WashHubApi
         // There must always be one ★ Shop Owner. If there is none (older database, or the owner row
         // was removed in phpMyAdmin), the oldest active Owner / Admin account becomes the Shop Owner.
         if ((int) $this->db->query('SELECT COUNT(*) FROM wh_users WHERE is_owner = 1')->fetchColumn() === 0) {
-            $this->db->exec("UPDATE wh_users SET is_owner = 1 WHERE role = 'admin' AND active = 1 ORDER BY id LIMIT 1");
+            $this->db->exec("UPDATE wh_users SET is_owner = 1 WHERE role = 'admin' AND active = 1 AND deleted_at IS NULL ORDER BY id LIMIT 1");
         }
     }
 
@@ -476,7 +522,7 @@ class WashHubApi
         $username = trim((string) ($in['username'] ?? ''));
         $password = (string) ($in['password'] ?? '');
 
-        $stmt = $this->db->prepare('SELECT * FROM wh_users WHERE username = ?');
+        $stmt = $this->db->prepare('SELECT * FROM wh_users WHERE username = ? AND deleted_at IS NULL'); // deleted accounts can't log in
         $stmt->execute([$username]);
         $user = $stmt->fetch(PDO::FETCH_ASSOC);
 
@@ -506,7 +552,7 @@ class WashHubApi
      */
     public function freshUser(int $id): ?array
     {
-        $stmt = $this->db->prepare('SELECT * FROM wh_users WHERE id = ? AND active = 1');
+        $stmt = $this->db->prepare('SELECT * FROM wh_users WHERE id = ? AND active = 1 AND deleted_at IS NULL');
         $stmt->execute([$id]);
         $user = $stmt->fetch(PDO::FETCH_ASSOC);
         return $user ? $this->publicUser($user) : null;
@@ -524,7 +570,7 @@ class WashHubApi
     /** Owner / Admin only: list every account (never the password hashes). The Shop Owner is listed first. */
     private function users(): array
     {
-        $rows = $this->db->query("SELECT * FROM wh_users ORDER BY is_owner DESC, FIELD(role, 'admin', 'staff'), full_name")
+        $rows = $this->db->query("SELECT * FROM wh_users WHERE deleted_at IS NULL ORDER BY is_owner DESC, FIELD(role, 'admin', 'staff'), full_name")
             ->fetchAll(PDO::FETCH_ASSOC);
         return array_map(fn ($u) => $this->publicUser($u) + [
             'active'        => (bool) $u['active'],
@@ -556,7 +602,7 @@ class WashHubApi
         // Load the account as it is now (to check the owner rules and to log what changed)
         $old = null;
         if ($id > 0) {
-            $stmt = $this->db->prepare('SELECT * FROM wh_users WHERE id = ?');
+            $stmt = $this->db->prepare('SELECT * FROM wh_users WHERE id = ? AND deleted_at IS NULL');
             $stmt->execute([$id]);
             $old = $stmt->fetch(PDO::FETCH_ASSOC) ?: null;
             if (!$old) {
@@ -613,8 +659,7 @@ class WashHubApi
     }
 
     /**
-     * Owner / Admin only: permanently delete an account. Payload {id}.
-     * Orders and payments are not linked to user accounts, so no shop records are lost.
+     * Owner / Admin only: delete an account (SOFT delete: it goes to the Trash and can no longer log in). Payload {id}.
      * You can't delete your own account (so the shop always keeps an Owner / Admin).
      * Owner protection: nobody can delete the ★ Shop Owner, and only the Shop Owner can delete another Owner / Admin.
      */
@@ -623,7 +668,7 @@ class WashHubApi
         if ($id === (int) ($this->user['id'] ?? 0)) {
             throw new InvalidArgumentException("You can't delete your own account.");
         }
-        $stmt = $this->db->prepare('SELECT * FROM wh_users WHERE id = ?');
+        $stmt = $this->db->prepare('SELECT * FROM wh_users WHERE id = ? AND deleted_at IS NULL');
         $stmt->execute([$id]);
         $target = $stmt->fetch(PDO::FETCH_ASSOC);
         if (!$target) {
@@ -635,7 +680,7 @@ class WashHubApi
         if ($target['role'] === 'admin' && empty($this->user['is_owner'])) {
             throw new InvalidArgumentException('Only the Shop Owner can delete another Owner / Admin account.');
         }
-        $this->db->prepare('DELETE FROM wh_users WHERE id = ?')->execute([$id]);
+        $this->softDelete('wh_users', $id);
         $this->record('user_delete', "{$target['full_name']} ({$target['username']}), " . self::roleName($target['role']));
         return $this->users();
     }
@@ -647,7 +692,7 @@ class WashHubApi
      */
     private function transferOwner(array $in): array
     {
-        $stmt = $this->db->prepare('SELECT * FROM wh_users WHERE id = ?');
+        $stmt = $this->db->prepare('SELECT * FROM wh_users WHERE id = ? AND deleted_at IS NULL');
         $stmt->execute([(int) ($this->user['id'] ?? 0)]);
         $me = $stmt->fetch(PDO::FETCH_ASSOC);
         if (!$me || !password_verify((string) ($in['password'] ?? ''), $me['password_hash'])) {
@@ -790,12 +835,19 @@ class WashHubApi
         }
     }
 
-    /** Usernames must be unique. $exceptId = the account being edited (it may keep its own name). */
+    /**
+     * Usernames must be unique. $exceptId = the account being edited (it may keep its own name).
+     * A deleted account in the Trash still keeps its username (so it can be restored).
+     */
     private function assertUsernameFree(string $username, int $exceptId): void
     {
-        $stmt = $this->db->prepare('SELECT id FROM wh_users WHERE username = ? AND id <> ?');
+        $stmt = $this->db->prepare('SELECT deleted_at FROM wh_users WHERE username = ? AND id <> ?');
         $stmt->execute([$username, $exceptId]);
-        if ($stmt->fetchColumn()) {
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+        if ($row && $row['deleted_at'] !== null) {
+            throw new InvalidArgumentException('That username belongs to a deleted account in the Trash. Restore that account, or choose another username.');
+        }
+        if ($row) {
             throw new InvalidArgumentException('That username is already taken.');
         }
     }
@@ -826,7 +878,7 @@ class WashHubApi
 
     private function services(): array
     {
-        $rows = $this->db->query('SELECT * FROM wh_services ORDER BY sort_order, id')->fetchAll(PDO::FETCH_ASSOC);
+        $rows = $this->db->query('SELECT * FROM wh_services WHERE deleted_at IS NULL ORDER BY sort_order, id')->fetchAll(PDO::FETCH_ASSOC);
         return array_map(fn ($r) => [
             'id'               => (int) $r['id'],
             'name'             => $r['name'],
@@ -857,7 +909,7 @@ class WashHubApi
         ];
         $id = (int) ($in['id'] ?? 0);
         if ($id > 0) {
-            $this->db->prepare('UPDATE wh_services SET name=?, unit=?, price=?, turnaround_hours=?, is_express=?, color=?, active=?, sort_order=? WHERE id=?')
+            $this->db->prepare('UPDATE wh_services SET name=?, unit=?, price=?, turnaround_hours=?, is_express=?, color=?, active=?, sort_order=? WHERE id=? AND deleted_at IS NULL')
                 ->execute([...$data, $id]);
         } else {
             $this->db->prepare('INSERT INTO wh_services (name, unit, price, turnaround_hours, is_express, color, active, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
@@ -867,18 +919,18 @@ class WashHubApi
     }
 
     /**
-     * Owner / Admin: remove a service from the price list for good. Payload {id}.
+     * Owner / Admin: remove a service from the price list (soft delete -> Trash). Payload {id}.
      * Past orders are not affected: each order line keeps its own copy of the name and price.
      */
     private function deleteService(int $id): array
     {
-        $stmt = $this->db->prepare('SELECT name, price FROM wh_services WHERE id = ?');
+        $stmt = $this->db->prepare('SELECT name, price FROM wh_services WHERE id = ? AND deleted_at IS NULL');
         $stmt->execute([$id]);
         $svc = $stmt->fetch(PDO::FETCH_ASSOC);
         if (!$svc) {
             throw new InvalidArgumentException('Service not found.');
         }
-        $this->db->prepare('DELETE FROM wh_services WHERE id = ?')->execute([$id]);
+        $this->softDelete('wh_services', $id);
         $this->record('service_delete', "{$svc['name']} (" . self::peso($svc['price']) . ')');
         return $this->services();
     }
@@ -892,17 +944,18 @@ class WashHubApi
     {
         $q      = trim((string) ($in['q'] ?? ''));
         $limit  = min(500, max(1, (int) ($in['limit'] ?? 100)));
-        $where  = '';
+        $where  = 'WHERE c.deleted_at IS NULL';   // soft delete: hide customers in the Trash
         $params = [];
         if ($q !== '') {
-            $where  = 'WHERE c.name LIKE ? OR c.phone LIKE ?';
+            $where .= ' AND (c.name LIKE ? OR c.phone LIKE ?)';
             $params = ["%$q%", '%' . preg_replace('/\s+/', '', $q) . '%'];
         }
         // GROUP BY lists every column so it also works with ONLY_FULL_GROUP_BY (Laravel strict mode)
+        // Order totals only count orders that are not in the Trash
         $sql = "SELECT c.id, c.name, c.phone, c.address, c.notes, c.created_at,
                        COUNT(o.id) AS order_count, MAX(o.created_at) AS last_order_at, COALESCE(SUM(o.total), 0) AS total_spent
                 FROM wh_customers c
-                LEFT JOIN wh_orders o ON o.customer_id = c.id
+                LEFT JOIN wh_orders o ON o.customer_id = c.id AND o.deleted_at IS NULL
                 $where
                 GROUP BY c.id, c.name, c.phone, c.address, c.notes, c.created_at
                 ORDER BY last_order_at DESC, c.name
@@ -932,7 +985,7 @@ class WashHubApi
         ];
         $id = (int) ($in['id'] ?? 0);
         if ($id > 0) {
-            $this->db->prepare('UPDATE wh_customers SET name=?, phone=?, address=?, notes=? WHERE id=?')->execute([...$fields, $id]);
+            $this->db->prepare('UPDATE wh_customers SET name=?, phone=?, address=?, notes=? WHERE id=? AND deleted_at IS NULL')->execute([...$fields, $id]);
         } else {
             $this->db->prepare('INSERT INTO wh_customers (name, phone, address, notes, created_at) VALUES (?, ?, ?, ?, ?)')
                 ->execute([...$fields, $this->dt($this->now())]);
@@ -949,16 +1002,16 @@ class WashHubApi
     {
         $id = (int) ($c['id'] ?? 0);
         if ($id > 0) {
-            $stmt = $this->db->prepare('SELECT id FROM wh_customers WHERE id = ?');
+            $stmt = $this->db->prepare('SELECT id FROM wh_customers WHERE id = ? AND deleted_at IS NULL');
             $stmt->execute([$id]);
             if ($stmt->fetchColumn()) {
                 return $id;
             }
         }
-        // Same phone number = same customer (avoids duplicate profiles)
+        // Same phone number = same customer (avoids duplicate profiles). Customers in the Trash are skipped.
         $phone = $this->cleanPhone($c['phone'] ?? '');
         if ($phone !== '') {
-            $stmt = $this->db->prepare('SELECT id FROM wh_customers WHERE phone = ? LIMIT 1');
+            $stmt = $this->db->prepare('SELECT id FROM wh_customers WHERE phone = ? AND deleted_at IS NULL LIMIT 1');
             $stmt->execute([$phone]);
             if ($found = $stmt->fetchColumn()) {
                 return (int) $found;
@@ -980,7 +1033,7 @@ class WashHubApi
      */
     private function orders(array $in): array
     {
-        $where  = [];
+        $where  = ['o.deleted_at IS NULL'];   // soft delete: orders in the Trash never show
         $params = [];
         $status = (string) ($in['status'] ?? 'all');
         $now    = $this->dt($this->now());
@@ -1027,7 +1080,7 @@ class WashHubApi
     private function order(int $id): array
     {
         $stmt = $this->db->prepare('SELECT o.*, c.name AS c_name, c.phone AS c_phone, c.address AS c_address, c.notes AS c_notes
-                                    FROM wh_orders o JOIN wh_customers c ON c.id = o.customer_id WHERE o.id = ?');
+                                    FROM wh_orders o JOIN wh_customers c ON c.id = o.customer_id WHERE o.id = ? AND o.deleted_at IS NULL');
         $stmt->execute([$id]);
         $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
         if (!$rows) {
@@ -1148,7 +1201,7 @@ class WashHubApi
      */
     private function track(string $token): array
     {
-        $stmt = $this->db->prepare('SELECT id FROM wh_orders WHERE track_token = ?');
+        $stmt = $this->db->prepare('SELECT id FROM wh_orders WHERE track_token = ? AND deleted_at IS NULL');
         $stmt->execute([$token]);
         $id = preg_match('/^[a-f0-9]{32}$/', $token) ? $stmt->fetchColumn() : false;
         if (!$id) {
@@ -1181,7 +1234,10 @@ class WashHubApi
         return bin2hex(random_bytes(16));
     }
 
-    /** Order/Tag ID format: WH-YYMMDD-0001 (resets daily). */
+    /**
+     * Order/Tag ID format: WH-YYMMDD-0001 (resets daily).
+     * Counts orders in the Trash too, so a deleted order's code is never given to a new order.
+     */
     private function nextOrderCode(DateTimeImmutable $now): string
     {
         $prefix = 'WH-' . $now->format('ymd') . '-';
@@ -1235,25 +1291,25 @@ class WashHubApi
         return $this->order($order['id']);
     }
 
-    /** Marks that the customer was already texted/called that the laundry is ready. */
     /**
-     * Both sides: permanently delete a wrong order (e.g. a typo in the weight or the wrong customer).
-     * Its items, payments and status history are deleted with it (ON DELETE CASCADE),
-     * so any payment on it also disappears from the sales reports. The customer profile stays.
+     * Both sides: delete a wrong order (e.g. a typo in the weight or the wrong customer).
+     * SOFT delete: the order goes to the Trash. Its items, payments and status history stay in the
+     * database, but its payments no longer count in the sales reports. The customer profile stays.
      */
     private function deleteOrder(int $id): array
     {
-        $order = $this->order($id); // throws "Order not found." if it doesn't exist
-        $this->db->prepare('DELETE FROM wh_orders WHERE id = ?')->execute([$id]);
+        $order = $this->order($id); // throws "Order not found." if it doesn't exist (or is already in the Trash)
+        $this->softDelete('wh_orders', $id);
         $this->record('order_delete', "{$order['code']} · {$order['customer']['name']} · total " . self::peso($order['total'])
             . ' · paid ' . self::peso($order['amount_paid']));
         return ['deleted' => $order['code']];
     }
 
+    /** Marks that the customer was already texted/called that the laundry is ready. */
     private function markNotified(array $in): array
     {
         $id = (int) ($in['id'] ?? 0);
-        $this->db->prepare('UPDATE wh_orders SET notified_at = ? WHERE id = ?')->execute([$this->dt($this->now()), $id]);
+        $this->db->prepare('UPDATE wh_orders SET notified_at = ? WHERE id = ? AND deleted_at IS NULL')->execute([$this->dt($this->now()), $id]);
         return $this->order($id);
     }
 
@@ -1332,8 +1388,10 @@ class WashHubApi
         $todayStart = $now->setTime(0, 0);
         $weekStart  = $todayStart->modify('-6 days');
 
-        // Sales = money actually received (payments), grouped per day for the last 7 days
-        $stmt = $this->db->prepare('SELECT DATE(paid_at) AS d, SUM(amount) AS total FROM wh_payments WHERE paid_at >= ? GROUP BY DATE(paid_at)');
+        // Sales = money actually received (payments), grouped per day for the last 7 days.
+        // Payments on orders in the Trash are left out (LIVE_PAYMENTS joins only active orders).
+        $live = self::LIVE_PAYMENTS;
+        $stmt = $this->db->prepare("SELECT DATE(p.paid_at) AS d, SUM(p.amount) AS total FROM $live WHERE p.paid_at >= ? GROUP BY DATE(p.paid_at)");
         $stmt->execute([$this->dt($weekStart)]);
         $byDay = [];
         foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $r) {
@@ -1345,23 +1403,23 @@ class WashHubApi
             $week[] = ['date' => $key, 'label' => $d->format('D'), 'total' => $byDay[$key] ?? 0.0];
         }
 
-        $stmt = $this->db->prepare('SELECT method, SUM(amount) AS total FROM wh_payments WHERE paid_at >= ? GROUP BY method');
+        $stmt = $this->db->prepare("SELECT p.method, SUM(p.amount) AS total FROM $live WHERE p.paid_at >= ? GROUP BY p.method");
         $stmt->execute([$this->dt($todayStart)]);
         $methods = ['cash' => 0.0, 'gcash' => 0.0, 'card' => 0.0];
         foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $r) {
             $methods[$r['method']] = (float) $r['total'];
         }
 
-        $stmt = $this->db->prepare('SELECT COUNT(*) AS n, COALESCE(SUM(total_weight), 0) AS kg FROM wh_orders WHERE created_at >= ?');
+        $stmt = $this->db->prepare('SELECT COUNT(*) AS n, COALESCE(SUM(total_weight), 0) AS kg FROM wh_orders WHERE created_at >= ? AND deleted_at IS NULL');
         $stmt->execute([$this->dt($todayStart)]);
         $today = $stmt->fetch(PDO::FETCH_ASSOC);
 
         $statusCounts = array_fill_keys(['received', 'washing', 'drying', 'ready'], 0);
-        foreach ($this->db->query("SELECT status, COUNT(*) AS n FROM wh_orders WHERE status <> 'completed' GROUP BY status")->fetchAll(PDO::FETCH_ASSOC) as $r) {
+        foreach ($this->db->query("SELECT status, COUNT(*) AS n FROM wh_orders WHERE status <> 'completed' AND deleted_at IS NULL GROUP BY status")->fetchAll(PDO::FETCH_ASSOC) as $r) {
             $statusCounts[$r['status']] = (int) $r['n'];
         }
 
-        $receivable = (float) $this->db->query("SELECT COALESCE(SUM(total - amount_paid), 0) FROM wh_orders WHERE payment_status <> 'paid'")->fetchColumn();
+        $receivable = (float) $this->db->query("SELECT COALESCE(SUM(total - amount_paid), 0) FROM wh_orders WHERE payment_status <> 'paid' AND deleted_at IS NULL")->fetchColumn();
 
         return [
             'today_sales'    => end($week)['total'],
@@ -1396,12 +1454,14 @@ class WashHubApi
         for ($d = new DateTimeImmutable($from, $this->tz); $d->format('Y-m-d') <= $to; $d = $d->modify('+1 day')) {
             $days[$d->format('Y-m-d')] = ['date' => $d->format('Y-m-d'), 'collected' => 0.0, 'orders' => 0, 'billed' => 0.0, 'kg' => 0.0];
         }
-        $stmt = $this->db->prepare('SELECT DATE(paid_at) AS d, SUM(amount) AS total FROM wh_payments WHERE paid_at >= ? AND paid_at < ? GROUP BY DATE(paid_at)');
+        // (orders in the Trash and their payments are left out of every number below)
+        $live = self::LIVE_PAYMENTS;
+        $stmt = $this->db->prepare("SELECT DATE(p.paid_at) AS d, SUM(p.amount) AS total FROM $live WHERE p.paid_at >= ? AND p.paid_at < ? GROUP BY DATE(p.paid_at)");
         $stmt->execute([$start, $end]);
         foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $r) {
             $days[$r['d']]['collected'] = (float) $r['total'];
         }
-        $stmt = $this->db->prepare('SELECT DATE(created_at) AS d, COUNT(*) AS n, SUM(total) AS billed, SUM(total_weight) AS kg FROM wh_orders WHERE created_at >= ? AND created_at < ? GROUP BY DATE(created_at)');
+        $stmt = $this->db->prepare('SELECT DATE(created_at) AS d, COUNT(*) AS n, SUM(total) AS billed, SUM(total_weight) AS kg FROM wh_orders WHERE created_at >= ? AND created_at < ? AND deleted_at IS NULL GROUP BY DATE(created_at)');
         $stmt->execute([$start, $end]);
         foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $r) {
             $days[$r['d']]['orders'] = (int) $r['n'];
@@ -1412,12 +1472,12 @@ class WashHubApi
         // Revenue per service (based on orders received in the range)
         $stmt = $this->db->prepare('SELECT i.name, i.unit, SUM(i.qty) AS qty, SUM(i.line_total) AS revenue, COUNT(DISTINCT i.order_id) AS orders
                                     FROM wh_order_items i JOIN wh_orders o ON o.id = i.order_id
-                                    WHERE o.created_at >= ? AND o.created_at < ?
+                                    WHERE o.created_at >= ? AND o.created_at < ? AND o.deleted_at IS NULL
                                     GROUP BY i.name, i.unit ORDER BY revenue DESC');
         $stmt->execute([$start, $end]);
         $services = array_map(fn ($r) => ['name' => $r['name'], 'unit' => $r['unit'], 'qty' => (float) $r['qty'], 'revenue' => (float) $r['revenue'], 'orders' => (int) $r['orders']], $stmt->fetchAll(PDO::FETCH_ASSOC));
 
-        $stmt = $this->db->prepare('SELECT method, SUM(amount) AS total, COUNT(*) AS n FROM wh_payments WHERE paid_at >= ? AND paid_at < ? GROUP BY method');
+        $stmt = $this->db->prepare("SELECT p.method, SUM(p.amount) AS total, COUNT(*) AS n FROM $live WHERE p.paid_at >= ? AND p.paid_at < ? GROUP BY p.method");
         $stmt->execute([$start, $end]);
         $methods = array_map(fn ($r) => ['method' => $r['method'], 'total' => (float) $r['total'], 'count' => (int) $r['n']], $stmt->fetchAll(PDO::FETCH_ASSOC));
 
@@ -1446,7 +1506,7 @@ class WashHubApi
 
     private function inventory(): array
     {
-        $rows = $this->db->query('SELECT * FROM wh_inventory ORDER BY name')->fetchAll(PDO::FETCH_ASSOC);
+        $rows = $this->db->query('SELECT * FROM wh_inventory WHERE deleted_at IS NULL ORDER BY name')->fetchAll(PDO::FETCH_ASSOC);
         return array_map(fn ($r) => [
             'id'            => (int) $r['id'],
             'name'          => $r['name'],
@@ -1469,7 +1529,7 @@ class WashHubApi
         $now    = $this->dt($this->now());
         $id     = (int) ($in['id'] ?? 0);
         if ($id > 0) {
-            $this->db->prepare('UPDATE wh_inventory SET name=?, unit=?, reorder_level=?, cost=?, updated_at=? WHERE id=?')
+            $this->db->prepare('UPDATE wh_inventory SET name=?, unit=?, reorder_level=?, cost=?, updated_at=? WHERE id=? AND deleted_at IS NULL')
                 ->execute([$name, $unit, $level, $cost, $now, $id]);
         } else {
             $stock = max(0, round((float) ($in['stock'] ?? 0), 2));
@@ -1492,7 +1552,7 @@ class WashHubApi
         if ($change == 0) {
             throw new InvalidArgumentException('Enter a quantity to add or remove.');
         }
-        $stmt = $this->db->prepare('SELECT stock FROM wh_inventory WHERE id = ?');
+        $stmt = $this->db->prepare('SELECT stock FROM wh_inventory WHERE id = ? AND deleted_at IS NULL');
         $stmt->execute([$id]);
         $stock = $stmt->fetchColumn();
         if ($stock === false) {
@@ -1509,18 +1569,18 @@ class WashHubApi
     }
 
     /**
-     * Delete a supply item the shop no longer uses.
-     * Its stock movement records are removed too (ON DELETE CASCADE on wh_inventory_logs).
+     * Delete a supply item the shop no longer uses (soft delete -> Trash).
+     * Its stock movement records stay in the database; they are hidden while the item is in the Trash.
      */
     private function deleteInventoryItem(int $id): array
     {
-        $stmt = $this->db->prepare('SELECT name, unit, stock FROM wh_inventory WHERE id = ?');
+        $stmt = $this->db->prepare('SELECT name, unit, stock FROM wh_inventory WHERE id = ? AND deleted_at IS NULL');
         $stmt->execute([$id]);
         $item = $stmt->fetch(PDO::FETCH_ASSOC);
         if (!$item) {
             throw new InvalidArgumentException('Item not found.');
         }
-        $this->db->prepare('DELETE FROM wh_inventory WHERE id = ?')->execute([$id]);
+        $this->softDelete('wh_inventory', $id);
         $this->record('inventory_delete', "{$item['name']} (had " . (float) $item['stock'] . " {$item['unit']} in stock)");
         return $this->inventory();
     }
@@ -1529,8 +1589,9 @@ class WashHubApi
     private function inventoryLogs(array $in): array
     {
         $id     = (int) ($in['id'] ?? 0);
+        // Only records that are not in the Trash, for items that are not in the Trash
         $stmt   = $this->db->prepare('SELECT l.*, i.name, i.unit FROM wh_inventory_logs l JOIN wh_inventory i ON i.id = l.item_id '
-                . ($id ? 'WHERE l.item_id = ? ' : '') . 'ORDER BY l.id DESC LIMIT 100');
+                . 'WHERE l.deleted_at IS NULL AND i.deleted_at IS NULL ' . ($id ? 'AND l.item_id = ? ' : '') . 'ORDER BY l.id DESC LIMIT 100');
         $stmt->execute($id ? [$id] : []);
         return array_map(fn ($r) => [
             'item_id'    => (int) $r['item_id'],
@@ -1544,8 +1605,9 @@ class WashHubApi
 
     // =====================================================================
     //  DELETING HISTORY (Owner / Admin only)
-    //  Deleting an order also deletes its items, payments and status history
-    //  (ON DELETE CASCADE), so those sales leave the reports too.
+    //  All of these are SOFT deletes: the rows get a deleted_at date and move
+    //  to the Trash. Orders in the Trash (and their payments) leave the reports,
+    //  but they can be restored. Only "Delete forever" in the Trash removes them.
     // =====================================================================
 
     /**
@@ -1564,7 +1626,7 @@ class WashHubApi
         if ($from > $to) {
             [$from, $to] = [$to, $from];
         }
-        $where  = "status = 'completed' AND created_at >= ? AND created_at < ?";
+        $where  = "status = 'completed' AND created_at >= ? AND created_at < ? AND deleted_at IS NULL";
         $params = [$this->dayStart($from), $this->dayStart($to, 1)];
 
         $stmt = $this->db->prepare("SELECT COUNT(*) AS n, COALESCE(SUM(total), 0) AS billed, COALESCE(SUM(amount_paid), 0) AS paid FROM wh_orders WHERE $where");
@@ -1573,7 +1635,7 @@ class WashHubApi
         $result = ['from' => $from, 'to' => $to, 'count' => (int) $sum['n'], 'billed' => (float) $sum['billed'], 'paid' => (float) $sum['paid'], 'deleted' => false];
 
         if (!empty($in['confirm']) && $result['count'] > 0) {
-            $this->db->prepare("DELETE FROM wh_orders WHERE $where")->execute($params);
+            $this->db->prepare("UPDATE wh_orders SET deleted_at = ? WHERE $where")->execute([$this->dt($this->now()), ...$params]);
             $result['deleted'] = true;
             $this->record('history_delete', "{$result['count']} finished orders from $from to $to · billed "
                 . self::peso($result['billed']) . ' · paid ' . self::peso($result['paid']));
@@ -1581,21 +1643,26 @@ class WashHubApi
         return $result;
     }
 
-    /** Delete a customer profile together with ALL of that customer's orders. Payload {id}. */
+    /**
+     * Delete a customer profile together with ALL of that customer's orders (soft delete -> Trash). Payload {id}.
+     * The customer and the orders get the SAME deleted_at time, so restoring the customer
+     * brings back exactly the orders that were deleted with them.
+     */
     private function deleteCustomer(int $id): array
     {
-        $stmt = $this->db->prepare('SELECT name FROM wh_customers WHERE id = ?');
+        $stmt = $this->db->prepare('SELECT name FROM wh_customers WHERE id = ? AND deleted_at IS NULL');
         $stmt->execute([$id]);
         $name = $stmt->fetchColumn();
         if ($name === false) {
             throw new InvalidArgumentException('Customer not found.');
         }
+        $now = $this->dt($this->now());
         $this->db->beginTransaction();
         try {
-            $stmt = $this->db->prepare('DELETE FROM wh_orders WHERE customer_id = ?');  // orders first (they point to the customer)
-            $stmt->execute([$id]);
+            $stmt = $this->db->prepare('UPDATE wh_orders SET deleted_at = ? WHERE customer_id = ? AND deleted_at IS NULL');
+            $stmt->execute([$now, $id]);
             $orders = $stmt->rowCount();
-            $this->db->prepare('DELETE FROM wh_customers WHERE id = ?')->execute([$id]);
+            $this->db->prepare('UPDATE wh_customers SET deleted_at = ? WHERE id = ?')->execute([$now, $id]);
             $this->db->commit();
         } catch (Throwable $e) {
             $this->db->rollBack();
@@ -1605,12 +1672,168 @@ class WashHubApi
         return ['deleted' => $name, 'orders' => $orders];
     }
 
-    /** Clear the inventory "Recent stock movements" log. Current stock levels are NOT changed. */
+    /** Clear the inventory "Recent stock movements" log (soft delete -> Trash). Current stock levels are NOT changed. */
     private function clearInventoryLogs(): array
     {
-        $n = (int) $this->db->exec('DELETE FROM wh_inventory_logs');
+        $stmt = $this->db->prepare('UPDATE wh_inventory_logs SET deleted_at = ? WHERE deleted_at IS NULL');
+        $stmt->execute([$this->dt($this->now())]);
+        $n = $stmt->rowCount();
         $this->record('inventory_logs_clear', "$n stock movement record" . ($n === 1 ? '' : 's') . ' cleared');
         return ['deleted' => $n];
+    }
+
+    // =====================================================================
+    //  TRASH — soft-deleted records: see them, restore them, or delete forever
+    // =====================================================================
+
+    /** SOFT DELETE one row: mark it with the current time instead of removing it. */
+    private function softDelete(string $table, int $id): void
+    {
+        $this->db->prepare("UPDATE $table SET deleted_at = ? WHERE id = ? AND deleted_at IS NULL")
+            ->execute([$this->dt($this->now()), $id]);
+    }
+
+    /** Owner / Admin: everything in the Trash, newest first (up to 300 per type). */
+    private function trash(): array
+    {
+        $q = fn (string $sql) => $this->db->query($sql)->fetchAll(PDO::FETCH_ASSOC);
+        $at = fn ($r) => $this->iso($r['deleted_at']);
+        return [
+            'orders' => array_map(fn ($r) => [
+                'id' => (int) $r['id'], 'deleted_at' => $at($r),
+                'title'   => $r['code'],
+                'details' => "{$r['c_name']} · " . self::STATUS_NAMES[$r['status']] . ' · total ' . self::peso($r['total']) . ' · paid ' . self::peso($r['amount_paid'])
+                           . ($r['c_deleted'] ? ' · customer is in the Trash too' : ''),
+            ], $q('SELECT o.*, c.name AS c_name, c.deleted_at AS c_deleted FROM wh_orders o JOIN wh_customers c ON c.id = o.customer_id
+                   WHERE o.deleted_at IS NOT NULL ORDER BY o.deleted_at DESC, o.id DESC LIMIT 300')),
+            'customers' => array_map(fn ($r) => [
+                'id' => (int) $r['id'], 'deleted_at' => $at($r),
+                'title'   => $r['name'],
+                'details' => trim(($r['phone'] ?: 'no phone') . " · {$r['n']} order" . ($r['n'] == 1 ? '' : 's') . ' deleted with them'),
+            ], $q('SELECT c.*, (SELECT COUNT(*) FROM wh_orders o WHERE o.customer_id = c.id AND o.deleted_at = c.deleted_at) AS n
+                   FROM wh_customers c WHERE c.deleted_at IS NOT NULL ORDER BY c.deleted_at DESC LIMIT 300')),
+            'services' => array_map(fn ($r) => [
+                'id' => (int) $r['id'], 'deleted_at' => $at($r),
+                'title' => $r['name'], 'details' => self::peso($r['price']) . ' per ' . $r['unit'],
+            ], $q('SELECT * FROM wh_services WHERE deleted_at IS NOT NULL ORDER BY deleted_at DESC LIMIT 300')),
+            'inventory' => array_map(fn ($r) => [
+                'id' => (int) $r['id'], 'deleted_at' => $at($r),
+                'title' => $r['name'], 'details' => (float) $r['stock'] . " {$r['unit']} in stock when deleted",
+            ], $q('SELECT * FROM wh_inventory WHERE deleted_at IS NOT NULL ORDER BY deleted_at DESC LIMIT 300')),
+            'stock_logs' => array_map(fn ($r) => [
+                'id' => (int) $r['id'], 'deleted_at' => $at($r),
+                'title'   => $r['name'],
+                'details' => ($r['change_qty'] > 0 ? '+' : '') . (float) $r['change_qty'] . " {$r['unit']} · {$r['reason']} · " . substr($r['created_at'], 0, 16),
+            ], $q('SELECT l.*, i.name, i.unit FROM wh_inventory_logs l JOIN wh_inventory i ON i.id = l.item_id
+                   WHERE l.deleted_at IS NOT NULL ORDER BY l.deleted_at DESC, l.id DESC LIMIT 300')),
+            'users' => array_map(fn ($r) => [
+                'id' => (int) $r['id'], 'deleted_at' => $at($r),
+                'title' => $r['full_name'], 'details' => "{$r['username']} · " . self::roleName($r['role']),
+            ], $q('SELECT * FROM wh_users WHERE deleted_at IS NOT NULL ORDER BY deleted_at DESC LIMIT 300')),
+        ];
+    }
+
+    /** Finds one row that is in the Trash, or throws. Returns [table, row]. */
+    private function trashedRow(string $type, int $id): array
+    {
+        $table = self::TRASH_TYPES[$type] ?? null;
+        if (!$table) {
+            throw new InvalidArgumentException('Unknown Trash type.');
+        }
+        $stmt = $this->db->prepare("SELECT * FROM $table WHERE id = ? AND deleted_at IS NOT NULL");
+        $stmt->execute([$id]);
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+        if (!$row) {
+            throw new InvalidArgumentException('That record is not in the Trash anymore.');
+        }
+        return [$table, $row];
+    }
+
+    /** A short name for a trashed row (for the activity log). */
+    private static function trashLabel(string $type, array $row): string
+    {
+        return match ($type) {
+            'orders'     => 'order ' . $row['code'],
+            'customers'  => 'customer ' . $row['name'],
+            'services'   => 'service ' . $row['name'],
+            'inventory'  => 'supply item ' . $row['name'],
+            'stock_logs' => 'stock record #' . $row['id'],
+            'users'      => "account {$row['full_name']} ({$row['username']})",
+        };
+    }
+
+    /**
+     * Owner / Admin: restore a record from the Trash = set deleted_at back to NULL. Payload {type, id}.
+     *  - a customer comes back with the orders that were deleted together with them
+     *  - an order whose customer is also in the Trash brings that customer back too
+     *  - only the Shop Owner may restore an Owner / Admin account (owner protection)
+     */
+    private function restoreFromTrash(array $in): array
+    {
+        $type = (string) ($in['type'] ?? '');
+        [$table, $row] = $this->trashedRow($type, (int) ($in['id'] ?? 0));
+        $extra = '';
+        if ($type === 'users' && $row['role'] === 'admin' && empty($this->user['is_owner'])) {
+            throw new InvalidArgumentException('Only the Shop Owner can restore an Owner / Admin account.');
+        }
+        $this->db->beginTransaction();
+        try {
+            if ($type === 'customers') {
+                $stmt = $this->db->prepare('UPDATE wh_orders SET deleted_at = NULL WHERE customer_id = ? AND deleted_at = ?');
+                $stmt->execute([$row['id'], $row['deleted_at']]);
+                $extra = ' with ' . $stmt->rowCount() . ' order(s)';
+            }
+            if ($type === 'orders') {
+                $stmt = $this->db->prepare('UPDATE wh_customers SET deleted_at = NULL WHERE id = ? AND deleted_at IS NOT NULL');
+                $stmt->execute([$row['customer_id']]);
+                $extra = $stmt->rowCount() ? ' (its customer was restored too)' : '';
+            }
+            $this->db->prepare("UPDATE $table SET deleted_at = NULL WHERE id = ?")->execute([$row['id']]);
+            $this->db->commit();
+        } catch (Throwable $e) {
+            $this->db->rollBack();
+            throw $e;
+        }
+        $this->record('trash_restore', 'Restored ' . self::trashLabel($type, $row) . $extra);
+        return $this->trash();
+    }
+
+    /**
+     * Shop Owner only: DELETE FOREVER (the only real DELETE in the system). Payload {type, id} or {type, all: true}.
+     * Only rows already in the Trash can be removed. Removing an order also removes its items,
+     * payments and status history (ON DELETE CASCADE). Removing a customer removes all their orders.
+     */
+    private function purgeFromTrash(array $in): array
+    {
+        $type  = (string) ($in['type'] ?? '');
+        $table = self::TRASH_TYPES[$type] ?? null;
+        if (!$table) {
+            throw new InvalidArgumentException('Unknown Trash type.');
+        }
+        if (!empty($in['all'])) {
+            $ids   = $this->db->query("SELECT id FROM $table WHERE deleted_at IS NOT NULL")->fetchAll(PDO::FETCH_COLUMN);
+            $label = count($ids) . " $type (emptied that Trash tab)";
+        } else {
+            [, $row] = $this->trashedRow($type, (int) ($in['id'] ?? 0));
+            $ids   = [$row['id']];
+            $label = self::trashLabel($type, $row);
+        }
+        if ($ids) {
+            $marks = implode(',', array_fill(0, count($ids), '?'));
+            $this->db->beginTransaction();
+            try {
+                if ($type === 'customers') {   // orders point to the customer, so they go first
+                    $this->db->prepare("DELETE FROM wh_orders WHERE customer_id IN ($marks)")->execute($ids);
+                }
+                $this->db->prepare("DELETE FROM $table WHERE id IN ($marks) AND deleted_at IS NOT NULL")->execute($ids);
+                $this->db->commit();
+            } catch (Throwable $e) {
+                $this->db->rollBack();
+                throw $e;
+            }
+            $this->record('trash_purge', 'Deleted forever: ' . $label);
+        }
+        return $this->trash();
     }
 
     // =====================================================================

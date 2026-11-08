@@ -46,7 +46,7 @@
 
         <div class="card">
           <div class="card-head"><h2>Services & prices</h2><button class="btn btn-sm" id="svc-add">${WH.icon('plus')} Add service</button></div>
-          <p class="small muted" style="margin-top:-6px">Express add-ons replace the turnaround time of the whole order (e.g. 6 hours = same day). Untick <b>Active</b> to hide a service for a while, or <b>Delete</b> to remove it for good. Old orders and tickets keep their prices either way.</p>
+          <p class="small muted" style="margin-top:-6px">Express add-ons replace the turnaround time of the whole order (e.g. 6 hours = same day). Untick <b>Active</b> to hide a service for a while, or <b>Delete</b> to remove it (it goes to the Trash). Old orders and tickets keep their prices either way.</p>
           <div class="table-wrap"><table class="table" id="svc-table">
             <thead><tr><th>Name</th><th>Unit</th><th>Price (₱)</th><th>Turnaround (h)</th><th>Express</th><th>Color</th><th>Active</th><th></th></tr></thead>
             <tbody></tbody>
@@ -130,7 +130,7 @@
           if (!id) { tr.remove(); return; }
           const name = tr.querySelector('[name="name"]').value;
           const ok = await WH.confirm('Delete this service?',
-            `<b>${h(name)}</b> will be removed from the price list and the New Order screen. Past orders and tickets keep their prices.<br><br>Tip: to hide it only for a while, untick <b>Active</b> instead.`,
+            `<b>${h(name)}</b> will be removed from the price list and the New Order screen. Past orders and tickets keep their prices.<br><br>Tip: to hide it only for a while, untick <b>Active</b> instead.<br><br>${WH.trashNote()}`,
             'Delete service');
           if (!ok) return;
           try {
@@ -170,9 +170,9 @@
       delBtn.onclick = async () => {
         if (!checked || !checked.count) return;
         const ok = await WH.confirm(`Delete ${checked.count} finished order${checked.count === 1 ? '' : 's'}?`,
-          `All finished orders from <b>${WH.fmtDate(checked.from + 'T12:00:00')}</b> to <b>${WH.fmtDate(checked.to + 'T12:00:00')}</b> will be deleted permanently,
-           with their payments (<b>${WH.money(checked.paid)}</b>). Reports for these dates will change. This cannot be undone.`,
-          'Delete permanently');
+          `All finished orders from <b>${WH.fmtDate(checked.from + 'T12:00:00')}</b> to <b>${WH.fmtDate(checked.to + 'T12:00:00')}</b> will be deleted,
+           with their payments (<b>${WH.money(checked.paid)}</b>). Reports for these dates will change.<br><br>${WH.trashNote()}`,
+          'Delete orders');
         if (!ok) return;
         try {
           const r = await WH.api('history_delete', { from: checked.from, to: checked.to, confirm: true });

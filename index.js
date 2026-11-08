@@ -24,6 +24,7 @@
     { key: 'reports',   label: 'Reports',    icon: 'chart',     need: 'report' },
     { key: 'users',     label: 'Users',      icon: 'shield',    need: 'users',        server: true },
     { key: 'activity',  label: 'Activity Log', icon: 'clock',   need: 'activity_log', server: true }, // ★ Shop Owner only
+    { key: 'trash',     label: 'Trash',      icon: 'trash',     need: 'trash',        server: true }, // soft-deleted records
     { key: 'settings',  label: 'Settings',   icon: 'settings',  need: 'service_save' },
     { key: 'account',   label: 'My Account', icon: 'user',      need: 'account_save', server: true, hidden: true },
   ];

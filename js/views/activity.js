@@ -29,6 +29,8 @@
     service_delete:       ['Deleted service',       'low',     'deletions'],
     inventory_delete:     ['Deleted supply item',   'low',     'deletions'],
     inventory_logs_clear: ['Cleared stock log',     'low',     'deletions'],
+    trash_restore:        ['Restored from Trash',   'ok',      'deletions'],
+    trash_purge:          ['Deleted forever',       'overdue', 'deletions'],
   };
   const GROUPS = { all: 'Everything', accounts: 'Accounts', deletions: 'Deletions', logins: 'Logins' };
 

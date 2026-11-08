@@ -78,7 +78,7 @@
     // Owner / Admin: delete a supply item that isn't used anymore (asks first)
     const remove = async (item) => {
       const ok = await WH.confirm(`Delete ${item.name}?`,
-        `This removes the item from Inventory, along with its stock movement records. It can't be undone.`
+        `This removes the item from Inventory, along with its stock movement records. ${WH.trashNote()}`
         + (item.stock > 0 ? `<br><br><b>It still has ${WH.num(item.stock)} ${h(item.unit)} in stock.</b>` : ''),
         'Delete item');
       if (!ok) return;
@@ -143,7 +143,7 @@
     const clearBtn = view.querySelector('#inv-clear');
     if (clearBtn) clearBtn.onclick = async () => {
       const ok = await WH.confirm('Clear stock movement history?',
-        'Every restock / use record in this list will be deleted permanently. <b>Current stock levels do not change.</b>',
+        `Every restock / use record in this list will be cleared. <b>Current stock levels do not change.</b><br><br>${WH.trashNote()}`,
         'Clear history');
       if (!ok) return;
       try {
