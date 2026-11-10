@@ -18,6 +18,8 @@
   const ACTIONS = {
     login:                ['Logged in',             'ok',      'logins'],
     login_failed:         ['Failed login',          'low',     'logins'],
+    login_locked:         ['Account locked',        'overdue', 'logins'],    // 5 wrong passwords (Admin / Staff)
+    user_unlock:          ['Unlocked account',      'ok',      'accounts'],
     user_add:             ['Added account',         'paid',    'accounts'],
     user_edit:            ['Changed account',       'partial', 'accounts'],
     user_delete:          ['Deleted account',       'low',     'accounts'],

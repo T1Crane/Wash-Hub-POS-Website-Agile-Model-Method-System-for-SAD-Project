@@ -91,6 +91,13 @@
   };
   /** Starter services that do NOT earn loyalty ticks (add-ons) */
   const NO_LOYALTY = ['Addt Detergent', 'Addt Fabcon', 'Over 8 kilos (Wash & Dry)', 'Over 8 kilos (Wash or Dry)', 'Blue Plastic'];
+  /** Stages each starter service needs: [Washing, Drying] (same as WashHubApi::DEFAULT_SERVICES). Others: both. */
+  const STAGES = {
+    'Wash': [true, false], 'Dry': [false, true], 'Dry & Fold': [false, true], 'Spin & Dry': [false, true],
+    'Addt Detergent': [false, false], 'Addt Fabcon': [false, false], 'Over 8 kilos (Wash & Dry)': [false, false],
+    'Over 8 kilos (Wash or Dry)': [false, false], 'Blue Plastic': [false, false],
+  };
+  const stagesOf = (name) => STAGES[name] || [true, true];
   /** Random 32-character secret for the QR tracking link (same format as the PHP version) */
   const newToken = () => Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) => b.toString(16).padStart(2, '0')).join('');
 
@@ -116,6 +123,8 @@
       }
       // Demo data saved before the loyalty card existed: add the "earns ticks" flag
       this.db.services.forEach((s) => { if (s.loyalty === undefined) s.loyalty = !NO_LOYALTY.includes(s.name); });
+      // Demo data saved before services could skip stages: add the Washing / Drying flags
+      this.db.services.forEach((s) => { if (s.do_wash === undefined) [s.do_wash, s.do_dry] = stagesOf(s.name); });
       return this.db;
     },
     save() {
@@ -154,7 +163,8 @@
         ['Over 8 kilos (Wash or Dry)', 'pc', 20, 24, false, 'pink'],
         ['Blue Plastic', 'pc', 12, 24, false, 'slate'],
       ].forEach(([name, unit, price, turnaround_hours, is_express, color], i) =>
-        this.db.services.push({ id: this.nextId('services'), name, unit, price, turnaround_hours, is_express, color, active: true, sort_order: i + 1, loyalty: !NO_LOYALTY.includes(name) }));
+        this.db.services.push({ id: this.nextId('services'), name, unit, price, turnaround_hours, is_express, color, active: true, sort_order: i + 1, loyalty: !NO_LOYALTY.includes(name),
+          do_wash: stagesOf(name)[0], do_dry: stagesOf(name)[1] }));
       const now = new Date().toISOString();
       [
         ['Liquid Detergent', 'L', 20, 5, 95], ['Fabric Conditioner', 'L', 15, 5, 80], ['Color-safe Bleach', 'L', 4, 3, 70],
@@ -216,6 +226,7 @@
             shop: { name: s.shop_name, phone: s.shop_phone, address: s.shop_address },
             order: {
               code: o.code, first_name: String(full.customer.name || '').trim().split(' ')[0], status: o.status, fulfillment: o.fulfillment,
+              need_wash: o.need_wash !== false, need_dry: o.need_dry !== false,
               is_express: o.is_express, created_at: o.created_at, ready_at: o.ready_at, completed_at: o.completed_at,
               total: o.total, balance: full.balance, payment_status: o.payment_status,
               items: o.items.map((i) => ({ name: i.name, unit: i.unit, qty: i.qty })),
@@ -328,6 +339,8 @@
         active: p.active === undefined ? true : !!p.active,
         sort_order: parseInt(p.sort_order, 10) || 0,
         loyalty: p.loyalty === undefined ? true : !!p.loyalty,
+        do_wash: p.do_wash === undefined ? true : !!p.do_wash,   // goes through Washing
+        do_dry: p.do_dry === undefined ? true : !!p.do_dry,      // goes through Drying
       };
       const existing = this.db.services.find((s) => s.id === Number(p.id));
       if (existing) Object.assign(existing, row);
@@ -408,6 +421,7 @@
       const items = Array.isArray(p.items) ? p.items : [];
       if (!items.length) fail('Add at least one service to the order.');
       let subtotal = 0, weight = 0, hours = 0, express = null;
+      let needWash = false, needDry = false;   // true if ANY service in the order needs that stage
       const lines = items.map((it) => {
         const s = this.db.services.find((x) => x.id === Number(it.service_id));
         if (!s || !s.active) fail('One of the selected services is no longer available.');
@@ -415,6 +429,8 @@
         if (qty <= 0) fail(`Enter the ${s.unit === 'kg' ? 'weight' : 'number of pieces'} for ${s.name}.`);
         const line_total = r2(qty * s.price);
         subtotal += line_total;
+        if (s.do_wash !== false) needWash = true;
+        if (s.do_dry !== false) needDry = true;
         if (s.unit === 'kg') weight += qty;
         if (s.is_express) express = s; else hours = Math.max(hours, s.turnaround_hours);
         return { service_id: s.id, name: s.name, unit: s.unit, qty, unit_price: s.price, line_total };
@@ -458,6 +474,8 @@
         loyalty_after: plan.after,
         status: 'received',
         fulfillment: p.fulfillment === 'delivery' ? 'delivery' : 'pickup',
+        need_wash: needWash,
+        need_dry: needDry,
         is_express: !!express,
         total_weight: r2(weight),
         subtotal, discount, total,
@@ -482,6 +500,9 @@
       o.status = p.status;
       o.status_updated_at = iso(at);
       o.completed_at = p.status === 'completed' ? iso(at) : null;
+      // moved by hand into a stage it normally skips -> that stage now belongs to the order
+      if (p.status === 'washing') o.need_wash = true;
+      if (p.status === 'drying') o.need_dry = true;
       o.history.push({ status: p.status, at: iso(at) });
       return this.order(o.id);
     },

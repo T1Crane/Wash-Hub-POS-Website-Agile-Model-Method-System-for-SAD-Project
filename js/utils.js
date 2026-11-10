@@ -134,11 +134,20 @@ window.WH = window.WH || {};
   // ---------- User roles & permissions ----------
   // The two sides of the system (same keys as WashHubApi::ROLES)
   WH.ROLES = {
-    admin: { label: 'Owner / Admin', about: 'Everything: orders, customers, dashboard, inventory, reports, prices, shop settings and user accounts' },
-    staff: { label: 'Staff',         about: 'New orders, payments, the Orders board and customers (no Reports or Users)' },
+    admin: { label: 'Admin', about: 'Everything: orders, customers, dashboard, inventory, reports, prices, shop settings and user accounts' },
+    staff: { label: 'Staff', about: 'New orders, payments, the Orders board and customers (no Reports or Users)' },
   };
   WH.roleLabel = (role) => (WH.ROLES[role] || { label: role }).label;
   WH.rolePill = (role) => `<span class="pill role-${WH.h(role)}">${WH.h(WH.roleLabel(role))}</span>`;
+  /**
+   * What to call this person: "Owner" for the ★ Shop Owner, otherwise "Admin" or "Staff".
+   * The Owner has the Admin role (same access) plus the Shop Owner extras; only the name shown is separate.
+   */
+  // Login lockout (same numbers as WashHubApi::LOGIN_MAX_TRIES / LOGIN_LOCK_MINUTES)
+  WH.LOGIN_MAX_TRIES = 5;
+  WH.LOGIN_LOCK_MINUTES = 15;
+  WH.userRoleLabel = (u) => (u && u.is_owner ? 'Owner' : WH.roleLabel(u && u.role));
+  WH.userRolePill = (u) => (u && u.is_owner ? '<span class="pill owner">★ Owner</span>' : WH.rolePill(u && u.role));
 
   /**
    * Can the logged-in user use this server action? The list comes from the server ("bootstrap"),
@@ -160,17 +169,33 @@ window.WH = window.WH || {};
     { key: 'completed', label: 'Picked Up / Delivered', action: 'Picked Up' },
   ];
   WH.statusInfo = (key) => WH.STATUSES.find((s) => s.key === key) || WH.STATUSES[0];
-  WH.nextStatus = (key) => {
-    const i = WH.STATUSES.findIndex((s) => s.key === key);
-    return i >= 0 && i < WH.STATUSES.length - 1 ? WH.STATUSES[i + 1] : null;
+
+  /**
+   * The stages THIS order goes through. It depends on its services (need_wash / need_dry from the server):
+   *   "Dry" only  -> Received → Drying → Folding / Ready → Picked Up   (no Washing)
+   *   "Wash" only -> Received → Washing → Folding / Ready → Picked Up  (no Drying)
+   * The stage the order is in now is always kept, even if it is normally skipped.
+   */
+  WH.orderSteps = (order) => WH.STATUSES.filter((s) =>
+    s.key === order.status
+    || (s.key === 'washing' ? order.need_wash !== false
+      : s.key === 'drying' ? order.need_dry !== false
+      : true));
+  /** Next stage of this order (skips the stages it doesn't need), or null at the end */
+  WH.nextStatus = (order) => {
+    const steps = WH.orderSteps(order);
+    const i = steps.findIndex((s) => s.key === order.status);
+    return i >= 0 && i < steps.length - 1 ? steps[i + 1] : null;
   };
-  WH.prevStatus = (key) => {
-    const i = WH.STATUSES.findIndex((s) => s.key === key);
-    return i > 0 ? WH.STATUSES[i - 1] : null;
+  /** Previous stage of this order (for the "Back to …" button), or null at the start */
+  WH.prevStatus = (order) => {
+    const steps = WH.orderSteps(order);
+    const i = steps.findIndex((s) => s.key === order.status);
+    return i > 0 ? steps[i - 1] : null;
   };
   /** Label for the single-tap "advance" button (Picked Up vs Delivered depends on the order) */
   WH.advanceLabel = (order) => {
-    const next = WH.nextStatus(order.status);
+    const next = WH.nextStatus(order);
     if (!next) return null;
     if (next.key === 'completed') return order.fulfillment === 'delivery' ? 'Mark Delivered' : 'Mark Picked Up';
     return next.action;

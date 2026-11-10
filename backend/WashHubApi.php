@@ -48,6 +48,14 @@ class WashHubApi
     /** The two sides of the system: admin = Owner / Admin (full access), staff = Staff. */
     public const ROLES = ['admin', 'staff'];
 
+    /**
+     * Login lockout: after this many wrong passwords in a row, an Admin or Staff account is locked
+     * for LOGIN_LOCK_MINUTES (or until the Shop Owner unlocks it). The ★ Shop Owner is never locked,
+     * so the shop can't be locked out of its own system.
+     */
+    public const LOGIN_MAX_TRIES = 5;
+    public const LOGIN_LOCK_MINUTES = 15;
+
     /** Actions anyone may call without logging in. */
     public const PUBLIC_ACTIONS = ['ping', 'login', 'logout', 'me', 'track'];
 
@@ -79,6 +87,7 @@ class WashHubApi
         'users'            => ['admin'],
         'user_save'        => ['admin'],
         'user_delete'      => ['admin'],
+        'user_unlock'      => ['admin'],  // unlock an account locked by wrong passwords
         // Owner / Admin only: deleting history
         'history_delete'       => ['admin'],  // finished orders in a date range
         'customer_delete'      => ['admin'],  // a customer + all their orders
@@ -157,23 +166,26 @@ class WashHubApi
     /**
      * Starter price list = the shop's paper order form (Gap Wash Hub Laundry Form).
      * Prices are per load / per item, so every unit is "pc" (quantity).
-     * name, unit, price (PHP), turnaround hours, is express, tile color, earns a loyalty tick (1/0: add-ons don't)
+     * name, unit, price (PHP), turnaround hours, is express, tile color, earns a loyalty tick (1/0: add-ons don't),
+     * needs the Washing stage (1/0), needs the Drying stage (1/0).
+     * Every order ends at "Folding / Ready", so folding needs no flag.
+     * Example: "Dry" = 0, 1 -> the order goes Received -> Drying -> Folding / Ready (no Washing).
      */
     public const DEFAULT_SERVICES = [
-        ['Wash',                       'pc', 65,  24, 0, 'blue', 1],
-        ['Wash & Dry',                 'pc', 130, 24, 0, 'blue', 1],
-        ['Dry',                        'pc', 80,  24, 0, 'amber', 1],
-        ['Dry & Fold',                 'pc', 100, 24, 0, 'amber', 1],
-        ['Wash, Dry, & Fold',          'pc', 150, 24, 0, 'teal', 1],
-        ['Spin & Dry',                 'pc', 100, 24, 0, 'teal', 1],
-        ['Package A',                  'pc', 180, 24, 0, 'violet', 1],
-        ['Package B',                  'pc', 200, 24, 0, 'violet', 1],
-        ['Package C',                  'pc', 220, 24, 0, 'violet', 1],
-        ['Addt Detergent',             'pc', 15,  24, 0, 'green', 0],
-        ['Addt Fabcon',                'pc', 15,  24, 0, 'green', 0],
-        ['Over 8 kilos (Wash & Dry)',  'pc', 40,  24, 0, 'pink', 0],
-        ['Over 8 kilos (Wash or Dry)', 'pc', 20,  24, 0, 'pink', 0],
-        ['Blue Plastic',               'pc', 12,  24, 0, 'slate', 0],
+        ['Wash',                       'pc', 65,  24, 0, 'blue', 1,   1, 0],
+        ['Wash & Dry',                 'pc', 130, 24, 0, 'blue', 1,   1, 1],
+        ['Dry',                        'pc', 80,  24, 0, 'amber', 1,  0, 1],
+        ['Dry & Fold',                 'pc', 100, 24, 0, 'amber', 1,  0, 1],
+        ['Wash, Dry, & Fold',          'pc', 150, 24, 0, 'teal', 1,   1, 1],
+        ['Spin & Dry',                 'pc', 100, 24, 0, 'teal', 1,   0, 1],
+        ['Package A',                  'pc', 180, 24, 0, 'violet', 1, 1, 1],
+        ['Package B',                  'pc', 200, 24, 0, 'violet', 1, 1, 1],
+        ['Package C',                  'pc', 220, 24, 0, 'violet', 1, 1, 1],
+        ['Addt Detergent',             'pc', 15,  24, 0, 'green', 0,  0, 0],
+        ['Addt Fabcon',                'pc', 15,  24, 0, 'green', 0,  0, 0],
+        ['Over 8 kilos (Wash & Dry)',  'pc', 40,  24, 0, 'pink', 0,   0, 0],
+        ['Over 8 kilos (Wash or Dry)', 'pc', 20,  24, 0, 'pink', 0,   0, 0],
+        ['Blue Plastic',               'pc', 12,  24, 0, 'slate', 0,  0, 0],
     ];
 
     private PDO $db;
@@ -214,6 +226,7 @@ class WashHubApi
             case 'users':            return $this->users();
             case 'user_save':        return $this->saveUser($in);
             case 'user_delete':      return $this->deleteUser((int) ($in['id'] ?? 0));
+            case 'user_unlock':      return $this->unlockUser((int) ($in['id'] ?? 0));
             case 'account_save':     return $this->saveAccount($in);
             case 'owner_transfer':   return $this->transferOwner($in);
             case 'activity_log':     return $this->activityLog($in);
@@ -282,6 +295,8 @@ class WashHubApi
                 active           TINYINT(1) NOT NULL DEFAULT 1,
                 sort_order       INT NOT NULL DEFAULT 0,
                 loyalty          TINYINT(1) NOT NULL DEFAULT 1,   -- 1 = each load earns a loyalty tick (add-ons: 0)
+                do_wash          TINYINT(1) NOT NULL DEFAULT 1,   -- 1 = orders with this service go through Washing
+                do_dry           TINYINT(1) NOT NULL DEFAULT 1,   -- 1 = orders with this service go through Drying
                 deleted_at       DATETIME NULL DEFAULT NULL   -- soft delete: NULL = active, date = in Trash
             ) $opts",
 
@@ -307,6 +322,8 @@ class WashHubApi
                 customer_id       INT UNSIGNED NOT NULL,
                 status            ENUM('received','washing','drying','ready','completed') NOT NULL DEFAULT 'received',
                 fulfillment       ENUM('pickup','delivery') NOT NULL DEFAULT 'pickup',
+                need_wash         TINYINT(1) NOT NULL DEFAULT 1,   -- 1 = this order goes through Washing (copied from its services)
+                need_dry          TINYINT(1) NOT NULL DEFAULT 1,   -- 1 = this order goes through Drying
                 is_express        TINYINT(1) NOT NULL DEFAULT 0,
                 total_weight      DECIMAL(8,2)  NOT NULL DEFAULT 0,
                 subtotal          DECIMAL(10,2) NOT NULL DEFAULT 0,
@@ -397,6 +414,8 @@ class WashHubApi
                 active        TINYINT(1) NOT NULL DEFAULT 1,
                 created_at    DATETIME NOT NULL,
                 last_login_at DATETIME NULL,
+                failed_logins INT UNSIGNED NOT NULL DEFAULT 0,   -- wrong passwords in a row (back to 0 after a good login)
+                locked_until  DATETIME NULL,                     -- Admin / Staff locked until this time (never the Shop Owner)
                 deleted_at    DATETIME NULL DEFAULT NULL   -- soft delete (a deleted account can't log in)
             ) $opts",
 
@@ -454,6 +473,30 @@ class WashHubApi
             // FREE rewards already given on earlier orders count as used
             $this->db->exec('UPDATE wh_customers c SET loyalty_free_used = (SELECT COALESCE(SUM(o.loyalty_rewards), 0) FROM wh_orders o
                              WHERE o.customer_id = c.id AND o.loyalty_counted = 1)');
+        }
+
+        // Upgrade for databases made before the login lockout existed
+        foreach ([['failed_logins', 'INT UNSIGNED NOT NULL DEFAULT 0'], ['locked_until', 'DATETIME NULL']] as [$column, $type]) {
+            if (!$this->db->query("SHOW COLUMNS FROM wh_users LIKE '$column'")->fetch()) {
+                $this->db->exec("ALTER TABLE wh_users ADD COLUMN $column $type");
+            }
+        }
+
+        // Upgrade for databases made before services could skip stages:
+        // add the Washing/Drying flags, then set them for the shop's starter services by name
+        // (e.g. "Dry" skips Washing, "Wash" skips Drying). Other services keep both stages.
+        if (!$this->db->query("SHOW COLUMNS FROM wh_services LIKE 'do_wash'")->fetch()) {
+            $this->db->exec('ALTER TABLE wh_services ADD COLUMN do_wash TINYINT(1) NOT NULL DEFAULT 1, ADD COLUMN do_dry TINYINT(1) NOT NULL DEFAULT 1');
+            $stmt = $this->db->prepare('UPDATE wh_services SET do_wash = ?, do_dry = ? WHERE name = ?');
+            foreach (self::DEFAULT_SERVICES as $svc) {
+                $stmt->execute([$svc[7], $svc[8], $svc[0]]);
+            }
+        }
+        // Older orders keep the full Washing -> Drying flow (default 1)
+        foreach (['need_wash', 'need_dry'] as $column) {
+            if (!$this->db->query("SHOW COLUMNS FROM wh_orders LIKE '$column'")->fetch()) {
+                $this->db->exec("ALTER TABLE wh_orders ADD COLUMN $column TINYINT(1) NOT NULL DEFAULT 1");
+            }
         }
 
         // Upgrade for databases made before the QR tracking link existed:
@@ -552,7 +595,7 @@ class WashHubApi
     /** Adds the shop's price list (DEFAULT_SERVICES), in the same order as the paper form. */
     private function insertDefaultServices(): void
     {
-        $stmt = $this->db->prepare('INSERT INTO wh_services (name, unit, price, turnaround_hours, is_express, color, loyalty, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
+        $stmt = $this->db->prepare('INSERT INTO wh_services (name, unit, price, turnaround_hours, is_express, color, loyalty, do_wash, do_dry, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
         foreach (self::DEFAULT_SERVICES as $i => $row) {
             $stmt->execute([...$row, $i + 1]);
         }
@@ -571,12 +614,34 @@ class WashHubApi
         $stmt = $this->db->prepare('SELECT * FROM wh_users WHERE username = ? AND deleted_at IS NULL'); // deleted accounts can't log in
         $stmt->execute([$username]);
         $user = $stmt->fetch(PDO::FETCH_ASSOC);
+        $now  = $this->now();
+
+        // Locked Admin / Staff account: refuse it before checking the password (even a right password waits)
+        $lockLeft = $user ? $this->lockSecondsLeft($user, $now) : 0;
+        if ($lockLeft > 0) {
+            $this->record('login_failed', "Locked account · username typed: {$user['username']}", []);
+            throw new InvalidArgumentException($this->lockedMessage($lockLeft));
+        }
 
         // Same message for "no such user" and "wrong password", so nobody can find out which usernames exist
         // Failed attempts are written to the activity log with the username typed (NEVER the password).
         // No person is named as "who": anyone at the counter could have typed it.
         if (!$user || !password_verify($password, $user['password_hash'])) {
             $this->record('login_failed', ($user ? 'Wrong password' : 'Unknown username') . ' · username typed: ' . mb_substr($username, 0, 60), []);
+            if ($user) {
+                $tries = (int) $user['failed_logins'] + 1;   // wrong passwords in a row
+                if (!$user['is_owner'] && $tries >= self::LOGIN_MAX_TRIES) {
+                    // 5th wrong password on an Admin / Staff account -> lock it (the count starts again after the lock)
+                    $until = $now->modify('+' . self::LOGIN_LOCK_MINUTES . ' minutes');
+                    $this->db->prepare('UPDATE wh_users SET failed_logins = 0, locked_until = ? WHERE id = ?')
+                        ->execute([$this->dt($until), $user['id']]);
+                    $this->record('login_locked', "{$user['full_name']} ({$user['username']}) locked for " . self::LOGIN_LOCK_MINUTES
+                        . ' minutes after ' . self::LOGIN_MAX_TRIES . ' wrong passwords', []);
+                    throw new InvalidArgumentException($this->lockedMessage(self::LOGIN_LOCK_MINUTES * 60));
+                }
+                // The Shop Owner's count goes up too (it shows in the Activity Log) but never locks the account
+                $this->db->prepare('UPDATE wh_users SET failed_logins = ? WHERE id = ?')->execute([$tries, $user['id']]);
+            }
             throw new InvalidArgumentException('Wrong username or password.');
         }
         if (!$user['active']) {
@@ -584,11 +649,50 @@ class WashHubApi
             throw new InvalidArgumentException('This account is disabled. Please ask the Owner / Admin.');
         }
 
-        $this->db->prepare('UPDATE wh_users SET last_login_at = ? WHERE id = ?')
-            ->execute([$this->dt($this->now()), $user['id']]);
+        // Right password: the wrong-password count starts again from 0
+        $this->db->prepare('UPDATE wh_users SET last_login_at = ?, failed_logins = 0, locked_until = NULL WHERE id = ?')
+            ->execute([$this->dt($now), $user['id']]);
         $this->record('login', 'Logged in', $user);
 
         return $this->publicUser($user);
+    }
+
+    /** Seconds until a locked account can try again (0 = not locked). The ★ Shop Owner is never locked. */
+    private function lockSecondsLeft(array $user, DateTimeImmutable $now): int
+    {
+        if (!empty($user['is_owner']) || empty($user['locked_until'])) {
+            return 0;
+        }
+        $until = new DateTimeImmutable($user['locked_until'], $this->tz);
+        return max(0, $until->getTimestamp() - $now->getTimestamp());
+    }
+
+    /** Message shown on the login screen while an account is locked. */
+    private function lockedMessage(int $seconds): string
+    {
+        $minutes = max(1, (int) ceil($seconds / 60));
+        return 'Too many wrong passwords. This account is locked for ' . $minutes . ' more minute' . ($minutes === 1 ? '' : 's')
+            . '. Ask the Owner to unlock it sooner.';
+    }
+
+    /**
+     * Owner / Admin: unlock an account that was locked by wrong passwords. Payload {id}.
+     * Same owner rule as editing: only the ★ Shop Owner can unlock another Admin account.
+     */
+    private function unlockUser(int $id): array
+    {
+        $stmt = $this->db->prepare('SELECT * FROM wh_users WHERE id = ? AND deleted_at IS NULL');
+        $stmt->execute([$id]);
+        $target = $stmt->fetch(PDO::FETCH_ASSOC);
+        if (!$target) {
+            throw new InvalidArgumentException('User not found.');
+        }
+        if ($target['role'] === 'admin' && empty($this->user['is_owner'])) {
+            throw new InvalidArgumentException('Only the Owner can unlock an Admin account.');
+        }
+        $this->db->prepare('UPDATE wh_users SET failed_logins = 0, locked_until = NULL WHERE id = ?')->execute([$id]);
+        $this->record('user_unlock', "{$target['full_name']} ({$target['username']})");
+        return $this->users();
     }
 
     /**
@@ -618,10 +722,13 @@ class WashHubApi
     {
         $rows = $this->db->query("SELECT * FROM wh_users WHERE deleted_at IS NULL ORDER BY is_owner DESC, FIELD(role, 'admin', 'staff'), full_name")
             ->fetchAll(PDO::FETCH_ASSOC);
+        $now = $this->now();
         return array_map(fn ($u) => $this->publicUser($u) + [
             'active'        => (bool) $u['active'],
             'created_at'    => $this->iso($u['created_at']),
             'last_login_at' => $this->iso($u['last_login_at']),
+            // locked by wrong passwords: until when (null = not locked)
+            'locked_until'  => $this->lockSecondsLeft($u, $now) > 0 ? $this->iso($u['locked_until']) : null,
         ], $rows);
     }
 
@@ -691,7 +798,8 @@ class WashHubApi
             $stmt = $this->db->prepare('UPDATE wh_users SET full_name = ?, username = ?, role = ?, active = ? WHERE id = ?');
             $stmt->execute([$fullName, $username, $role, $active, $id]);
             if ($password !== '') {
-                $this->db->prepare('UPDATE wh_users SET password_hash = ? WHERE id = ?')
+                // a new password from the Owner / Admin also unlocks the account
+                $this->db->prepare('UPDATE wh_users SET password_hash = ?, failed_logins = 0, locked_until = NULL WHERE id = ?')
                     ->execute([password_hash($password, PASSWORD_DEFAULT), $id]);
             }
         } else {
@@ -797,7 +905,7 @@ class WashHubApi
     /** 'admin' -> 'Owner / Admin', 'staff' -> 'Staff' (for log messages). */
     private static function roleName(string $role): string
     {
-        return $role === 'admin' ? 'Owner / Admin' : 'Staff';
+        return $role === 'admin' ? 'Admin' : 'Staff';
     }
 
     /** 1234.5 -> '₱1,234.50' (for log messages). */
@@ -961,6 +1069,8 @@ class WashHubApi
             'active'           => (bool) $r['active'],
             'sort_order'       => (int) $r['sort_order'],
             'loyalty'          => (bool) $r['loyalty'],   // earns loyalty ticks
+            'do_wash'          => (bool) $r['do_wash'],   // order goes through Washing
+            'do_dry'           => (bool) $r['do_dry'],    // order goes through Drying
         ], $rows);
     }
 
@@ -979,13 +1089,15 @@ class WashHubApi
             !isset($in['active']) || $in['active'] ? 1 : 0,
             (int) ($in['sort_order'] ?? 0),
             !isset($in['loyalty']) || $in['loyalty'] ? 1 : 0,   // earns loyalty ticks (default yes)
+            !isset($in['do_wash']) || $in['do_wash'] ? 1 : 0,   // needs the Washing stage (default yes)
+            !isset($in['do_dry']) || $in['do_dry'] ? 1 : 0,     // needs the Drying stage (default yes)
         ];
         $id = (int) ($in['id'] ?? 0);
         if ($id > 0) {
-            $this->db->prepare('UPDATE wh_services SET name=?, unit=?, price=?, turnaround_hours=?, is_express=?, color=?, active=?, sort_order=?, loyalty=? WHERE id=? AND deleted_at IS NULL')
+            $this->db->prepare('UPDATE wh_services SET name=?, unit=?, price=?, turnaround_hours=?, is_express=?, color=?, active=?, sort_order=?, loyalty=?, do_wash=?, do_dry=? WHERE id=? AND deleted_at IS NULL')
                 ->execute([...$data, $id]);
         } else {
-            $this->db->prepare('INSERT INTO wh_services (name, unit, price, turnaround_hours, is_express, color, active, sort_order, loyalty) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
+            $this->db->prepare('INSERT INTO wh_services (name, unit, price, turnaround_hours, is_express, color, active, sort_order, loyalty, do_wash, do_dry) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
                 ->execute($data);
         }
         return $this->services();
@@ -1199,6 +1311,8 @@ class WashHubApi
         $weight = 0.0;
         $hours = 0;
         $express = null;
+        $needWash = 0;   // 1 if ANY service in the order needs Washing
+        $needDry  = 0;   // 1 if ANY service in the order needs Drying
         foreach ($items as $it) {
             $svc = $services[(int) ($it['service_id'] ?? 0)] ?? null;
             if (!$svc || !$svc['active']) {
@@ -1212,6 +1326,8 @@ class WashHubApi
             $lines[] = [$svc['id'], $svc['name'], $svc['unit'], $qty, $svc['price'], $line];
             $loyaltyLines[] = ['unit' => $svc['unit'], 'qty' => $qty, 'price' => $svc['price'], 'loyalty' => $svc['loyalty']];
             $subtotal += $line;
+            $needWash = ($needWash || $svc['do_wash']) ? 1 : 0;
+            $needDry  = ($needDry || $svc['do_dry']) ? 1 : 0;
             if ($svc['unit'] === 'kg') {
                 $weight += $qty;
             }
@@ -1254,11 +1370,11 @@ class WashHubApi
                 $paid  = min(max(round((float) ($in['payment']['amount'] ?? 0), 2), 0), $total);
                 $code  = $this->nextOrderCode($now);
                 $this->db->prepare('INSERT INTO wh_orders
-                        (code, track_token, customer_id, status, fulfillment, is_express, total_weight, subtotal, discount, total,
+                        (code, track_token, customer_id, status, fulfillment, need_wash, need_dry, is_express, total_weight, subtotal, discount, total,
                          amount_paid, payment_status, notes, created_at, ready_at, status_updated_at,
                          loyalty_ticks, loyalty_counted, loyalty_rewards, loyalty_discount, loyalty_after)
-                        VALUES (?, ?, ?, \'received\', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)')
-                    ->execute([$code, $this->newToken(), $customerId, $fulfil, $express ? 1 : 0, round($weight, 2), $subtotal, $discount, $total,
+                        VALUES (?, ?, ?, \'received\', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)')
+                    ->execute([$code, $this->newToken(), $customerId, $fulfil, $needWash, $needDry, $express ? 1 : 0, round($weight, 2), $subtotal, $discount, $total,
                                $paid, $this->paymentStatus($paid, $total), $notes, $this->dt($now), $this->dt($readyAt), $this->dt($now),
                                $loyalty['ticks'], $loyalty['used'], $loyalty['discount'], $loyalty['after']]);
                 $orderId = (int) $this->db->lastInsertId();
@@ -1313,6 +1429,8 @@ class WashHubApi
                 'first_name'     => explode(' ', trim($o['customer']['name']))[0],
                 'status'         => $o['status'],
                 'fulfillment'    => $o['fulfillment'],
+                'need_wash'      => $o['need_wash'],
+                'need_dry'       => $o['need_dry'],
                 'is_express'     => $o['is_express'],
                 'created_at'     => $o['created_at'],
                 'ready_at'       => $o['ready_at'],
@@ -1357,6 +1475,11 @@ class WashHubApi
         $now = $this->now();
         $this->db->prepare('UPDATE wh_orders SET status = ?, status_updated_at = ?, completed_at = ? WHERE id = ?')
             ->execute([$status, $this->dt($now), $status === 'completed' ? $this->dt($now) : null, $id]);
+        // If staff moves the order into a stage it normally skips, that stage now belongs to the order
+        if ($status === 'washing' || $status === 'drying') {
+            $column = $status === 'washing' ? 'need_wash' : 'need_dry';
+            $this->db->prepare("UPDATE wh_orders SET $column = 1 WHERE id = ?")->execute([$id]);
+        }
         $this->logStatus($id, $status, $now);
         return $this->order($id);
     }
@@ -1456,6 +1579,8 @@ class WashHubApi
                 'track_token'       => $r['track_token'],
                 'status'            => $r['status'],
                 'fulfillment'       => $r['fulfillment'],
+                'need_wash'         => (bool) $r['need_wash'],   // goes through Washing
+                'need_dry'          => (bool) $r['need_dry'],    // goes through Drying
                 'is_express'        => (bool) $r['is_express'],
                 'total_weight'      => (float) $r['total_weight'],
                 'subtotal'          => (float) $r['subtotal'],

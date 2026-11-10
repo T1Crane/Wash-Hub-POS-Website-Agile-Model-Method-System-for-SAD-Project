@@ -90,7 +90,7 @@
       <div class="sidebar-foot">
         <a class="user-chip ${key === 'account' ? 'active' : ''}" ${local ? '' : 'href="#/account"'} title="My account">
           <span class="avatar" style="width:32px;height:32px;font-size:.75rem">${h(WH.initials(WH.state.user.full_name))}</span>
-          <span class="foot-text"><b>${h(WH.state.user.full_name)}</b><br><span class="role">${h(WH.roleLabel(WH.state.user.role))}</span></span></a>
+          <span class="foot-text"><b>${h(WH.state.user.full_name)}</b><br><span class="role">${h(WH.userRoleLabel(WH.state.user))}</span></span></a>
         ${local ? '' : `<button class="btn btn-sm btn-ghost" style="color:#fff;width:100%;margin-bottom:8px" onclick="WH.logout()">${WH.icon('logout')}<span class="foot-text">Log out</span></button>`}
         <div title="${h(local ? WH.store.reason : 'Connected to MySQL')}"><span class="mode-dot ${local ? 'local' : ''}"></span><span class="foot-text">${local ? 'Demo mode (browser)' : 'MySQL connected'}</span></div>
       </div>`;
@@ -198,7 +198,8 @@
       return;
     }
     document.title = `${o.code} · ${shop.name}`;
-    const idx = WH.STATUSES.findIndex((s) => s.key === o.status);
+    const steps = WH.orderSteps(o);   // only the stages this order goes through
+    const idx = steps.findIndex((s) => s.key === o.status);
     const done = o.status === 'completed';
     const late = WH.isOverdue(o);
     const message = done ? `Your laundry was ${o.fulfillment === 'delivery' ? 'delivered' : 'picked up'}. Thank you!`
@@ -211,8 +212,8 @@
       <p class="sub">Hi ${h(o.first_name)}! ${h(message)}</p>
       <div class="track-code">${h(o.code)}</div>
       <div class="track-status st-${h(o.status)}">${h(WH.statusLabel(o))}</div>
-      <div class="timeline">${WH.STATUSES.map((s, i) => `
-        <div class="stage ${i <= idx ? 'done' : ''} ${i === idx ? 'current' : ''}"><div class="bar-s"></div>${h(i === 4 ? WH.statusLabel({ status: 'completed', fulfillment: o.fulfillment }) : s.label)}</div>`).join('')}
+      <div class="timeline">${steps.map((s, i) => `
+        <div class="stage ${i <= idx ? 'done' : ''} ${i === idx ? 'current' : ''}"><div class="bar-s"></div>${h(s.key === 'completed' ? WH.statusLabel({ status: 'completed', fulfillment: o.fulfillment }) : s.label)}</div>`).join('')}
       </div>
       <dl class="kv" style="margin-top:6px">
         <dt>${done ? (o.fulfillment === 'delivery' ? 'Delivered' : 'Picked up') : 'Ready by'}</dt><dd>${WH.fmtWhen(done ? o.completed_at : o.ready_at)}</dd>

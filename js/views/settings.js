@@ -48,10 +48,11 @@
           <div class="card-head"><h2>Services & prices</h2><button class="btn btn-sm" id="svc-add">${WH.icon('plus')} Add service</button></div>
           <p class="small muted" style="margin-top:-6px">Express add-ons replace the turnaround time of the whole order (e.g. 6 hours = same day). Untick <b>Active</b> to hide a service for a while, or <b>Delete</b> to remove it (it goes to the Trash). Old orders and tickets keep their prices either way.</p>
           <div class="table-wrap"><table class="table" id="svc-table">
-            <thead><tr><th>Name</th><th>Unit</th><th>Price (₱)</th><th>Turnaround (h)</th><th>Express</th><th title="Each load of this service earns a loyalty tick">★ Loyalty</th><th>Color</th><th>Active</th><th></th></tr></thead>
+            <thead><tr><th>Name</th><th>Unit</th><th>Price (₱)</th><th>Turnaround (h)</th><th>Express</th><th title="Each load of this service earns a loyalty tick">★ Loyalty</th><th title="Orders with this service go through the Washing stage">Washing</th><th title="Orders with this service go through the Drying stage">Drying</th><th>Color</th><th>Active</th><th></th></tr></thead>
             <tbody></tbody>
           </table></div>
           <p class="small muted" style="margin:8px 0 0"><b>★ Loyalty</b> = each load of this service earns a tick on the customer's loyalty card. Untick it for add-ons (detergent, plastic…).</p>
+          <p class="small muted" style="margin:4px 0 0"><b>Washing / Drying</b> = the stages an order with this service goes through on the board. Example: <b>Dry</b> has only Drying ticked, so its orders skip Washing; <b>Wash</b> has only Washing ticked, so they skip Drying. Every order ends at Folding / Ready. Untick both for add-ons.</p>
         </div>
 
         ${canEditShop ? `
@@ -133,6 +134,8 @@
         <td><input type="number" name="turnaround_hours" min="1" step="1" value="${h(svc.turnaround_hours)}" style="width:100px"></td>
         <td><input type="checkbox" name="is_express" ${svc.is_express ? 'checked' : ''} style="width:22px;height:22px"></td>
         <td><input type="checkbox" name="loyalty" ${svc.loyalty !== false ? 'checked' : ''} style="width:22px;height:22px" title="Earns a loyalty tick"></td>
+        <td><input type="checkbox" name="do_wash" ${svc.do_wash !== false ? 'checked' : ''} style="width:22px;height:22px" title="Goes through Washing"></td>
+        <td><input type="checkbox" name="do_dry" ${svc.do_dry !== false ? 'checked' : ''} style="width:22px;height:22px" title="Goes through Drying"></td>
         <td><select name="color">${COLORS.map((c) => `<option ${svc.color === c ? 'selected' : ''}>${c}</option>`).join('')}</select></td>
         <td><input type="checkbox" name="active" ${svc.active ? 'checked' : ''} style="width:22px;height:22px"></td>
         <td><div class="row" style="flex-wrap:nowrap">
@@ -178,7 +181,7 @@
       });
     };
     view.querySelector('#svc-add').onclick = () => {
-      tbody.insertAdjacentHTML('beforeend', row({ name: '', unit: 'pc', price: 0, turnaround_hours: 24, is_express: false, loyalty: true, color: 'green', active: true }));
+      tbody.insertAdjacentHTML('beforeend', row({ name: '', unit: 'pc', price: 0, turnaround_hours: 24, is_express: false, loyalty: true, do_wash: true, do_dry: true, color: 'green', active: true }));
       bindRows();
       tbody.lastElementChild.querySelector('input').focus();
     };

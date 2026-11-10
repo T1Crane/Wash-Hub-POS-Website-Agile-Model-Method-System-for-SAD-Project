@@ -14,7 +14,7 @@
 
   /** Move an order to the next stage. Returns the updated order (or null if cancelled). */
   WH.advanceOrder = async (order) => {
-    const next = WH.nextStatus(order.status);
+    const next = WH.nextStatus(order);   // skips Washing / Drying if this order doesn't need it
     if (!next) return null;
     try {
       // A role that can't take payments must leave unpaid orders to someone who can
@@ -103,13 +103,15 @@
     let order;
     try { order = await WH.api('order', { id }); } catch (e) { WH.error(e); return; }
 
-    const idx = WH.STATUSES.findIndex((s) => s.key === order.status);
-    const timeline = WH.STATUSES.map((s, i) => `
+    // Timeline shows only the stages this order goes through (e.g. no "Washing" for a Dry-only order)
+    const steps = WH.orderSteps(order);
+    const idx = steps.findIndex((s) => s.key === order.status);
+    const timeline = steps.map((s, i) => `
       <div class="stage ${i < idx ? 'done' : ''} ${i === idx ? 'done current' : ''}">
-        <div class="bar-s"></div>${h(i === 4 ? WH.statusLabel({ status: 'completed', fulfillment: order.fulfillment }) : s.label)}</div>`).join('');
+        <div class="bar-s"></div>${h(s.key === 'completed' ? WH.statusLabel({ status: 'completed', fulfillment: order.fulfillment }) : s.label)}</div>`).join('');
     const overdue = WH.isOverdue(order);
     const next = WH.advanceLabel(order);
-    const prev = WH.prevStatus(order.status);
+    const prev = WH.prevStatus(order);
 
     const m = WH.modal({
       title: `Order ${order.code}`,
