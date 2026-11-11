@@ -10,7 +10,7 @@
      Owner / Admin. Other admins see those accounts read-only and can manage
      Staff only. Nobody can delete the Shop Owner. The Shop Owner can hand the
      ★ mark to another admin ("Make Shop Owner", asks for their password).
-   - Login lockout: an Admin / Staff account is locked for 15 minutes after
+   - Login lockout: an Admin / Staff account is locked for 5 minutes after
      5 wrong passwords (never the Owner). It shows as "Locked" here, and the
      Owner (or an Admin, for Staff accounts) can press Unlock.
    - Names shown: "★ Owner", "Admin", "Staff". The Owner has the Admin role

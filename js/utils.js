@@ -145,7 +145,7 @@ window.WH = window.WH || {};
    */
   // Login lockout (same numbers as WashHubApi::LOGIN_MAX_TRIES / LOGIN_LOCK_MINUTES)
   WH.LOGIN_MAX_TRIES = 5;
-  WH.LOGIN_LOCK_MINUTES = 15;
+  WH.LOGIN_LOCK_MINUTES = 5;
   WH.userRoleLabel = (u) => (u && u.is_owner ? 'Owner' : WH.roleLabel(u && u.role));
   WH.userRolePill = (u) => (u && u.is_owner ? '<span class="pill owner">★ Owner</span>' : WH.rolePill(u && u.role));
 

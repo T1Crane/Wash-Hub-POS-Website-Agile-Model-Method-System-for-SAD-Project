@@ -54,7 +54,7 @@ class WashHubApi
      * so the shop can't be locked out of its own system.
      */
     public const LOGIN_MAX_TRIES = 5;
-    public const LOGIN_LOCK_MINUTES = 15;
+    public const LOGIN_LOCK_MINUTES = 5;
 
     /** Actions anyone may call without logging in. */
     public const PUBLIC_ACTIONS = ['ping', 'login', 'logout', 'me', 'track'];
@@ -671,7 +671,7 @@ class WashHubApi
     private function lockedMessage(int $seconds): string
     {
         $minutes = max(1, (int) ceil($seconds / 60));
-        return 'Too many wrong passwords. This account is locked for ' . $minutes . ' more minute' . ($minutes === 1 ? '' : 's')
+        return 'Too many wrong passwords. This account is locked for ' . $minutes . ' minute' . ($minutes === 1 ? '' : 's')
             . '. Ask the Owner to unlock it sooner.';
     }
 
