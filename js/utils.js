@@ -80,7 +80,7 @@ window.WH = window.WH || {};
       every: Math.min(size, Math.max(1, parseInt(s.loyalty_free_every, 10) || 7)),
       reward: ['free_load', 'amount', 'percent'].includes(s.loyalty_reward) ? s.loyalty_reward : 'free_load',
       value: Math.max(0, Number(s.loyalty_reward_value) || 0),
-      mode: s.loyalty_mode === 'auto' ? 'auto' : 'save',   // save = FREE kept as 'FREE available'; auto = used at once
+      mode: s.loyalty_mode === 'auto' ? 'auto' : 'save',
     };
   };
   /** Is tick number t (counted over all cards: 1, 2, 3…) a FREE box? */
@@ -111,7 +111,7 @@ window.WH = window.WH || {};
     const after = before + ticks;
     let reached = 0;
     for (let t = before + 1; t <= after; t++) if (WH.isFreeTick(t, cfg)) reached++;
-    const available = Math.max(0, WH.freeEarned(after, cfg) - usedBefore);   // includes what this order just earned
+    const available = Math.max(0, WH.freeEarned(after, cfg) - usedBefore);
     const perOrder = cfg.reward === 'percent' ? 1 : cfg.reward === 'free_load' ? loads.length : 99;
     const maxUse = Math.min(available, perOrder);
     const used = cfg.mode === 'auto' ? Math.min(reached, maxUse) : Math.max(0, Math.min(Number(useFree) || 0, maxUse));

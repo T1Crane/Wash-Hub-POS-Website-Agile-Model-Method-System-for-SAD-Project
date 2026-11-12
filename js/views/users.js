@@ -114,7 +114,7 @@
         try {
           await WH.api('owner_transfer', { id: u.id, password: WH.formData(p.el).password });
           WH.toast(`${u.full_name} is now the Shop Owner`, 'success');
-          setTimeout(() => location.reload(), 900);   // reload so your menu and permissions update
+          setTimeout(() => location.reload(), 900);
         } catch (e) { WH.error(e); }
       };
     };

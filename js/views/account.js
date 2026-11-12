@@ -72,8 +72,8 @@
           new_password: f.new_password,
         });
         WH.toast(f.new_password ? 'Saved. Use your new password next time you log in.' : 'Profile saved', 'success');
-        WH.renderChrome();          // sidebar shows the new name
-        WH.views.account(view);     // redraw with the saved values (password boxes cleared)
+        WH.renderChrome();
+        WH.views.account(view);
       } catch (e) { WH.error(e); }
     };
   };

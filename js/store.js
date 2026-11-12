@@ -236,10 +236,9 @@
         order_notify: () => { const o = this.find(p.id); o.notified_at = iso(new Date()); return this.order(o.id); },
         order_delete: () => {
           const o = this.find(p.id);
-          // a wrong order shouldn't count on the loyalty card
           const c = this.db.customers.find((x) => x.id === o.customer_id);
           if (c && o.loyalty_ticks) c.loyalty_ticks = Math.max(0, (c.loyalty_ticks || 0) - o.loyalty_ticks);
-          if (c && o.loyalty_rewards) c.loyalty_free_used = Math.max(0, (c.loyalty_free_used || 0) - o.loyalty_rewards);   // FREE used is given back
+          if (c && o.loyalty_rewards) c.loyalty_free_used = Math.max(0, (c.loyalty_free_used || 0) - o.loyalty_rewards);
           this.db.orders = this.db.orders.filter((x) => x !== o);
           return { deleted: o.code };
         },
@@ -339,8 +338,8 @@
         active: p.active === undefined ? true : !!p.active,
         sort_order: parseInt(p.sort_order, 10) || 0,
         loyalty: p.loyalty === undefined ? true : !!p.loyalty,
-        do_wash: p.do_wash === undefined ? true : !!p.do_wash,   // goes through Washing
-        do_dry: p.do_dry === undefined ? true : !!p.do_dry,      // goes through Drying
+        do_wash: p.do_wash === undefined ? true : !!p.do_wash,
+        do_dry: p.do_dry === undefined ? true : !!p.do_dry,
       };
       const existing = this.db.services.find((s) => s.id === Number(p.id));
       if (existing) Object.assign(existing, row);
@@ -469,7 +468,7 @@
         track_token: newToken(),
         customer_id: customerId,
         loyalty_ticks: plan.ticks,
-        loyalty_rewards: plan.used,   // FREE used on this order
+        loyalty_rewards: plan.used,
         loyalty_discount: plan.discount,
         loyalty_after: plan.after,
         status: 'received',

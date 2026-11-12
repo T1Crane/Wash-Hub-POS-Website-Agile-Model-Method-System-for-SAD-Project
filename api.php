@@ -59,7 +59,7 @@ try {
     }
 
     if ($action === 'login') {
-        $user = $api->handle('login', $input);     // throws "Wrong username or password." if wrong
+        $user = $api->handle('login', $input);
         session_regenerate_id(true);               // new session ID after login (blocks "session fixation" attacks)
         $_SESSION['washhub_user'] = $user;
         $data = $user;
@@ -68,11 +68,11 @@ try {
         session_destroy();
         $data = true;
     } elseif ($action === 'me') {
-        $data = $_SESSION['washhub_user'] ?? null;  // who is logged in right now (null = nobody)
+        $data = $_SESSION['washhub_user'] ?? null;
     } else {
         $data = $api->handle($action, $input);
         if ($action === 'account_save') {
-            $_SESSION['washhub_user'] = $data;      // keep the session in sync with the new name / username
+            $_SESSION['washhub_user'] = $data;
         }
     }
     echo json_encode(['ok' => true, 'data' => $data]);

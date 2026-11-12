@@ -15,10 +15,6 @@
  *    - Dates are stored as DATETIME in the shop's timezone (Asia/Manila) and
  *      sent to the browser as ISO-8601 strings with offset (+08:00).
  *
- *  Database tables (all prefixed "wh_" so they won't clash with Laravel's own):
- *    wh_settings, wh_services, wh_customers, wh_orders, wh_order_items,
- *    wh_payments, wh_order_logs, wh_inventory, wh_inventory_logs
- *
  *  NOTE: only positional "?" placeholders are used so the same SQL works with
  *  both XAMPP's PDO settings and Laravel's (native prepares).
  */
@@ -34,7 +30,7 @@ use Throwable;
 
 class WashHubApi
 {
-    /** Shop ti mezone. Change this if the shop is outside the Philippines. */
+    /** Shop timezone. Change this if the shop is outside the Philippines. */
     public const TIMEZONE = 'Asia/Manila';
 
     /** Order workflow, in order. "completed" means Picked Up / Delivered. */
@@ -42,7 +38,6 @@ class WashHubApi
     /** Status names as shown on screen (used in the Trash list). */
     private const STATUS_NAMES = ['received' => 'Received', 'washing' => 'Washing', 'drying' => 'Drying', 'ready' => 'Folding / Ready', 'completed' => 'Picked Up / Delivered'];
 
-    /** Accepted payment methods. */
     public const PAYMENT_METHODS = ['cash', 'gcash', 'card'];
 
     /** The two sides of the system: admin = Owner / Admin (full access), staff = Staff. */
@@ -62,7 +57,7 @@ class WashHubApi
     /** Who may do what: action => roles allowed. Not listed = nobody (default deny). */
     public const PERMISSIONS = [
         'bootstrap'        => ['admin', 'staff'],
-        'account_save'     => ['admin', 'staff'],  // "My Account": edit your own profile
+        'account_save'     => ['admin', 'staff'],
         // Both sides: front desk and Orders board
         'orders'           => ['admin', 'staff'],
         'order'            => ['admin', 'staff'],
@@ -80,28 +75,28 @@ class WashHubApi
         'inventory_logs'   => ['admin'],
         'inventory_save'   => ['admin'],
         'inventory_adjust' => ['admin'],
-        'inventory_delete' => ['admin'],  // remove a supply item that's no longer used
+        'inventory_delete' => ['admin'],
         'service_save'    => ['admin'],
         'service_delete'   => ['admin'],
         'settings_save'    => ['admin'],
         'users'            => ['admin'],
         'user_save'        => ['admin'],
         'user_delete'      => ['admin'],
-        'user_unlock'      => ['admin'],  // unlock an account locked by wrong passwords
+        'user_unlock'      => ['admin'],
         // Owner / Admin only: deleting history
-        'history_delete'       => ['admin'],  // finished orders in a date range
-        'customer_delete'      => ['admin'],  // a customer + all their orders
-        'customer_loyalty' => ['admin'],      // change a customer's loyalty card by hand
-        'loyalty_card_save' => ['admin'],     // Loyalty Card page form (e.g. copy a paper card)
-        'inventory_logs_clear' => ['admin'],  // the stock movement log
+        'history_delete'       => ['admin'],
+        'customer_delete'      => ['admin'],
+        'customer_loyalty' => ['admin'],
+        'loyalty_card_save' => ['admin'],
+        'inventory_logs_clear' => ['admin'],
         // Shop Owner only (an Owner / Admin account that also has the ★ Shop Owner mark, see OWNER_ONLY)
-        'activity_log'     => ['admin'],  // who did what and when
-        'owner_transfer'   => ['admin'],  // hand the Shop Owner mark to another Owner / Admin
+        'activity_log'     => ['admin'],
+        'owner_transfer'   => ['admin'],
         // Trash (soft-deleted records)
-        'trash'            => ['admin'],  // see what was deleted
-        'trash_restore'    => ['admin'],  // bring it back
-        'trash_purge'      => ['admin'],  // delete forever (Shop Owner only, see OWNER_ONLY)
-        'trash_archive'    => ['admin'],  // read the copies of what was deleted forever (Shop Owner only)
+        'trash'            => ['admin'],
+        'trash_restore'    => ['admin'],
+        'trash_purge'      => ['admin'],
+        'trash_archive'    => ['admin'],
     ];
 
     /**
@@ -155,8 +150,8 @@ class WashHubApi
         // Web address the QR code on tickets points to (blank = the address the app is opened with)
         'public_url'    => '',
         // Loyalty card: every N ticks (1 tick = 1 load) gives a reward. Default: 14-box card, FREE at box 7 and 14.
-        'loyalty_enabled'      => '1',          // '1' = on, '0' = off
-        'loyalty_card_size'    => '14',         // boxes on one card
+        'loyalty_enabled'      => '1',
+        'loyalty_card_size'    => '14',
         'loyalty_free_every'   => '7',          // every 7th box is FREE
         'loyalty_reward'       => 'free_load',  // free_load = cheapest load in the order is free | amount = ₱ off | percent = % off
         'loyalty_reward_value' => '0',          // the ₱ or % for "amount" / "percent"
@@ -218,12 +213,10 @@ class WashHubApi
             throw new InvalidArgumentException('Only the Shop Owner can do this.');
         }
         switch ($action) {
-            // --- setup / app start ---
             case 'ping':             $this->install(); return ['mode' => 'mysql', 'time' => $this->iso($this->now())];
             case 'login':            return $this->login($in);
             case 'track':            return $this->track((string) ($in['t'] ?? ''));
             case 'bootstrap':        return ['settings' => $this->settings(), 'services' => $this->services(), 'permissions' => $this->myPermissions()];
-            // --- user accounts ---
             case 'users':            return $this->users();
             case 'user_save':        return $this->saveUser($in);
             case 'user_delete':      return $this->deleteUser((int) ($in['id'] ?? 0));
@@ -231,20 +224,16 @@ class WashHubApi
             case 'account_save':     return $this->saveAccount($in);
             case 'owner_transfer':   return $this->transferOwner($in);
             case 'activity_log':     return $this->activityLog($in);
-            // --- settings & price list ---
             case 'settings_save':    return $this->saveSettings($in);
             case 'service_save':     return $this->saveService($in);
             case 'service_delete':   return $this->deleteService((int) ($in['id'] ?? 0));
-            // --- customers ---
             case 'customers':        return $this->customers($in);
             case 'customer_save':    return $this->saveCustomer($in);
             case 'customer_delete':  return $this->deleteCustomer((int) ($in['id'] ?? 0));
             case 'customer_loyalty': return $this->setCustomerLoyalty($in);
             case 'loyalty_card_save': return $this->saveLoyaltyCard($in);
-            // --- deleting history ---
             case 'history_delete':       return $this->deleteHistory($in);
             case 'inventory_logs_clear': return $this->clearInventoryLogs();
-            // --- orders / POS ---
             case 'orders':           return $this->orders($in);
             case 'order':            return $this->order((int) ($in['id'] ?? 0));
             case 'order_create':     return $this->createOrder($in);
@@ -252,16 +241,13 @@ class WashHubApi
             case 'order_payment':    return $this->addPayment($in);
             case 'order_notify':     return $this->markNotified($in);
             case 'order_delete':     return $this->deleteOrder((int) ($in['id'] ?? 0));
-            // --- dashboard & reports ---
             case 'dashboard':        return $this->dashboard();
             case 'report':           return $this->report($in);
-            // --- inventory (supplies) ---
             case 'inventory':        return $this->inventory();
             case 'inventory_save':   return $this->saveInventoryItem($in);
             case 'inventory_adjust': return $this->adjustInventory($in);
             case 'inventory_logs':   return $this->inventoryLogs($in);
             case 'inventory_delete': return $this->deleteInventoryItem((int) ($in['id'] ?? 0));
-            // --- trash (soft delete) ---
             case 'trash':            return $this->trash();
             case 'trash_restore':    return $this->restoreFromTrash($in);
             case 'trash_purge':      return $this->purgeFromTrash($in);
@@ -647,7 +633,7 @@ class WashHubApi
         if (!$user || !password_verify($password, $user['password_hash'])) {
             $this->record('login_failed', ($user ? 'Wrong password' : 'Unknown username') . ' · username typed: ' . mb_substr($username, 0, 60), []);
             if ($user) {
-                $tries = (int) $user['failed_logins'] + 1;   // wrong passwords in a row
+                $tries = (int) $user['failed_logins'] + 1;
                 if (!$user['is_owner'] && $tries >= self::LOGIN_MAX_TRIES) {
                     // 5th wrong password on an Admin / Staff account -> lock it (the count starts again after the lock)
                     $until = $now->modify('+' . self::LOGIN_LOCK_MINUTES . ' minutes');
@@ -825,7 +811,7 @@ class WashHubApi
                 ->execute([$username, $fullName, password_hash($password, PASSWORD_DEFAULT), $role, $active, $this->dt($this->now())]);
         }
         if ($log) {
-            $this->record(...$log);   // written only after the save worked
+            $this->record(...$log);
         }
         return $this->users();
     }
@@ -920,7 +906,7 @@ class WashHubApi
             ]);
     }
 
-    /** 'admin' -> 'Owner / Admin', 'staff' -> 'Staff' (for log messages). */
+    /** admin -> Admin, staff -> Staff (for log messages). */
     private static function roleName(string $role): string
     {
         return $role === 'admin' ? 'Admin' : 'Staff';
@@ -967,7 +953,6 @@ class WashHubApi
                 ->execute([password_hash($newPassword, PASSWORD_DEFAULT), $me['id']]);
         }
 
-        // Activity log (My Account changes)
         $changes = [];
         if ($me['full_name'] !== $fullName) { $changes[] = "name \"{$me['full_name']}\" → \"$fullName\""; }
         if ($me['username'] !== $username)  { $changes[] = "username {$me['username']} → $username"; }
@@ -986,7 +971,7 @@ class WashHubApi
             'username'  => $u['username'],
             'full_name' => $u['full_name'],
             'role'      => $u['role'],
-            'is_owner'  => !empty($u['is_owner']),   // the ★ Shop Owner
+            'is_owner'  => !empty($u['is_owner']),
         ];
     }
 
@@ -1086,9 +1071,9 @@ class WashHubApi
             'color'            => $r['color'],
             'active'           => (bool) $r['active'],
             'sort_order'       => (int) $r['sort_order'],
-            'loyalty'          => (bool) $r['loyalty'],   // earns loyalty ticks
-            'do_wash'          => (bool) $r['do_wash'],   // order goes through Washing
-            'do_dry'           => (bool) $r['do_dry'],    // order goes through Drying
+            'loyalty'          => (bool) $r['loyalty'],
+            'do_wash'          => (bool) $r['do_wash'],
+            'do_dry'           => (bool) $r['do_dry'],
         ], $rows);
     }
 
@@ -1147,7 +1132,7 @@ class WashHubApi
     {
         $q      = trim((string) ($in['q'] ?? ''));
         $limit  = min(500, max(1, (int) ($in['limit'] ?? 100)));
-        $where  = 'WHERE c.deleted_at IS NULL';   // soft delete: hide customers in the Trash
+        $where  = 'WHERE c.deleted_at IS NULL';
         $params = [];
         if ($q !== '') {
             $where .= ' AND (c.name LIKE ? OR c.phone LIKE ?)';
@@ -1240,7 +1225,7 @@ class WashHubApi
      */
     private function orders(array $in): array
     {
-        $where  = ['o.deleted_at IS NULL'];   // soft delete: orders in the Trash never show
+        $where  = ['o.deleted_at IS NULL'];
         $params = [];
         $status = (string) ($in['status'] ?? 'all');
         $now    = $this->dt($this->now());
@@ -1295,7 +1280,6 @@ class WashHubApi
         }
         $order = $this->hydrateOrders($rows)[0];
 
-        // Single-order view also includes the status history
         $stmt = $this->db->prepare('SELECT status, changed_at FROM wh_order_logs WHERE order_id = ? ORDER BY id');
         $stmt->execute([$id]);
         $order['history'] = array_map(fn ($r) => ['status' => $r['status'], 'at' => $this->iso($r['changed_at'])], $stmt->fetchAll(PDO::FETCH_ASSOC));
@@ -1489,7 +1473,7 @@ class WashHubApi
         if (!in_array($status, self::STATUSES, true)) {
             throw new InvalidArgumentException('Invalid status.');
         }
-        $this->order($id); // throws if missing
+        $this->order($id);
         $now = $this->now();
         $this->db->prepare('UPDATE wh_orders SET status = ?, status_updated_at = ?, completed_at = ? WHERE id = ?')
             ->execute([$status, $this->dt($now), $status === 'completed' ? $this->dt($now) : null, $id]);
@@ -1536,7 +1520,7 @@ class WashHubApi
      */
     private function deleteOrder(int $id): array
     {
-        $order = $this->order($id); // throws "Order not found." if it doesn't exist (or is already in the Trash)
+        $order = $this->order($id);
         $this->softDelete('wh_orders', $id);
         // A wrong order shouldn't count on the loyalty card: take its ticks back (restoring it gives them back)
         $this->takeBackLoyaltyTicks($order);
@@ -1597,8 +1581,8 @@ class WashHubApi
                 'track_token'       => $r['track_token'],
                 'status'            => $r['status'],
                 'fulfillment'       => $r['fulfillment'],
-                'need_wash'         => (bool) $r['need_wash'],   // goes through Washing
-                'need_dry'          => (bool) $r['need_dry'],    // goes through Drying
+                'need_wash'         => (bool) $r['need_wash'],
+                'need_dry'          => (bool) $r['need_dry'],
                 'is_express'        => (bool) $r['is_express'],
                 'total_weight'      => (float) $r['total_weight'],
                 'subtotal'          => (float) $r['subtotal'],
@@ -1617,7 +1601,6 @@ class WashHubApi
                                         'loyalty_ticks' => (int) $r['c_ticks'], 'loyalty_free_used' => (int) $r['c_free_used']],
                 'items'             => $items[$id] ?? [],
                 'payments'          => $payments[$id] ?? [],
-                // loyalty card for this order
                 'loyalty_ticks'     => (int) $r['loyalty_ticks'],
                 'loyalty_counted'   => (bool) $r['loyalty_counted'],
                 'loyalty_rewards'   => (int) $r['loyalty_rewards'],
@@ -2005,7 +1988,7 @@ class WashHubApi
     {
         $cfg   = $this->loyaltyConfig();
         $loads = self::loadValues($lines);
-        $auto  = count($loads);   // 1 tick per load
+        $auto  = count($loads);
         if (!$cfg['enabled']) {
             return ['ticks' => 0, 'auto' => 0, 'reached' => 0, 'used' => 0, 'discount' => 0.0, 'after' => $before, 'available' => 0];
         }
@@ -2107,7 +2090,7 @@ class WashHubApi
             $stmt->execute([$name]);
             $c = $stmt->fetch(PDO::FETCH_ASSOC);
         }
-        if (!$c) {   // new customer
+        if (!$c) {
             $id   = $this->saveCustomer(['name' => $name, 'phone' => $phone])['id'];
             $stmt = $this->db->prepare('SELECT * FROM wh_customers WHERE id = ?');
             $stmt->execute([$id]);

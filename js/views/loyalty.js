@@ -16,7 +16,7 @@
   /** One customer's card, like the paper card: ticked boxes in blue, FREE boxes in yellow. */
   const cardHTML = (c, cfg, canEdit) => {
     const ticks = c.loyalty_ticks;
-    const card = Math.floor(ticks / cfg.size) + 1;   // the card the next tick goes on
+    const card = Math.floor(ticks / cfg.size) + 1;
     const filled = ticks % cfg.size;
     let boxes = '';
     for (let i = 1; i <= cfg.size; i++) {
@@ -49,7 +49,7 @@
 
   WH.views = WH.views || {};
   WH.views.loyalty = (view) => {
-    const canEdit = WH.can('loyalty_card_save');   // Owner / Admin
+    const canEdit = WH.can('loyalty_card_save');
     const cfg = WH.loyaltyConfig();
     let list = [];
 

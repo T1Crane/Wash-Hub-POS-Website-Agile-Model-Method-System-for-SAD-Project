@@ -52,7 +52,7 @@
         if (i % 2 === 0) rects += `<rect x="${x}" y="0" width="${width}" height="${height}"/>`;
         x += width;
       });
-      x += narrow; // gap between characters
+      x += narrow;
     });
     return `<svg viewBox="0 0 ${x + 8} ${height}" preserveAspectRatio="none" role="img" aria-label="Barcode ${WH.h(text)}"><rect width="100%" height="100%" fill="#fff"/><g fill="#000">${rects}</g></svg>`;
   };
@@ -62,10 +62,9 @@
     root.querySelectorAll('[data-qr]').forEach((el) => {
       el.innerHTML = '';
       if (typeof window.QRCode === 'function') {
-        // eslint-disable-next-line no-new
         new window.QRCode(el, { text: el.dataset.qr, width: 232, height: 232, correctLevel: window.QRCode.CorrectLevel.M });
       } else {
-        el.style.display = 'none'; // offline: barcode still works
+        el.style.display = 'none';
       }
     });
   };
@@ -76,7 +75,7 @@
    * Opening it shows the public "track your order" card (see showTracking in index.js).
    */
   WH.trackUrl = (o) => {
-    if (!o.track_token) return o.code; // very old demo orders have no tracking code
+    if (!o.track_token) return o.code;
     const base = String(WH.state.settings.public_url || '').trim() || (location.origin + location.pathname);
     const url = new URL(base, location.href);
     url.search = '';

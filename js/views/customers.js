@@ -31,13 +31,12 @@
     };
   });
 
-  /** Customer profile with order history */
   /** The customer's loyalty card: ticked boxes in blue, FREE boxes in yellow. */
   const loyaltyCardHTML = (c) => {
     const ticks = Number(c.loyalty_ticks) || 0;
     const cfg = WH.loyaltyConfig();
     if (!cfg.enabled) return '';
-    const card = Math.floor(ticks / cfg.size) + 1;   // the card the next tick goes on
+    const card = Math.floor(ticks / cfg.size) + 1;
     const filled = ticks % cfg.size;
     let boxes = '';
     for (let i = 1; i <= cfg.size; i++) {

@@ -20,12 +20,12 @@
     { key: 'pos',       label: 'New Order',  icon: 'plus',      need: 'order_create' },
     { key: 'board',     label: 'Orders',     icon: 'board',     need: 'orders' },
     { key: 'customers', label: 'Customers',  icon: 'users',     need: 'customers' },
-    { key: 'loyalty',   label: 'Loyalty Card', icon: 'star',    need: 'customers' },   // ★ every customer's stamp card
+    { key: 'loyalty',   label: 'Loyalty Card', icon: 'star',    need: 'customers' },
     { key: 'inventory', label: 'Inventory',  icon: 'box',       need: 'inventory' },
     { key: 'reports',   label: 'Reports',    icon: 'chart',     need: 'report' },
     { key: 'users',     label: 'Users',      icon: 'shield',    need: 'users',        server: true },
     { key: 'activity',  label: 'Activity Log', icon: 'clock',   need: 'activity_log', server: true }, // ★ Shop Owner only
-    { key: 'trash',     label: 'Trash',      icon: 'trash',     need: 'trash',        server: true }, // soft-deleted records
+    { key: 'trash',     label: 'Trash',      icon: 'trash',     need: 'trash',        server: true },
     { key: 'settings',  label: 'Settings',   icon: 'settings',  need: 'service_save' },
     { key: 'account',   label: 'My Account', icon: 'user',      need: 'account_save', server: true, hidden: true },
   ];
@@ -35,7 +35,7 @@
   WH.myRoutes = () => ROUTES.filter((r) => WH.can(r.need) && !(r.server && WH.store.mode !== 'mysql'));
 
   WH.state = { settings: {}, services: [] };
-  let current = null; // { key, handle }
+  let current = null;
 
   /** WH.navigate('board', {q:'WH-261022-0001'}) */
   WH.navigate = (key, params = {}) => {
@@ -62,7 +62,7 @@
   const render = () => {
     const { key, params } = parseHash();
     if (current && current.handle && current.handle.destroy) current.handle.destroy();
-    document.getElementById('modal-root').innerHTML = ''; // close dialogs left open on the old page
+    document.getElementById('modal-root').innerHTML = '';
     const route = ROUTES.find((r) => r.key === key);
     document.title = `${route.label} · ${WH.state.settings.shop_name || 'Gap Wash Hub'} POS`;
     document.getElementById('page-title').textContent = route.label;
@@ -104,7 +104,7 @@
 
   /** Red counters on the menu: overdue orders, low-stock items */
   WH.updateBadges = WH.debounce(async () => {
-    if (!WH.can('dashboard')) return; // the counts come from the dashboard (Owner/Admin only)
+    if (!WH.can('dashboard')) return;
     try {
       const d = await WH.api('dashboard');
       const set = (key, n) => {
@@ -166,7 +166,7 @@
     const form = document.getElementById('login-form');
     form.username.focus();
     form.addEventListener('submit', async (e) => {
-      e.preventDefault(); // stop the browser from reloading the page
+      e.preventDefault();
       try {
         const user = await WH.api('login', { username: form.username.value.trim(), password: form.password.value });
         root.innerHTML = '';
@@ -198,7 +198,7 @@
       return;
     }
     document.title = `${o.code} · ${shop.name}`;
-    const steps = WH.orderSteps(o);   // only the stages this order goes through
+    const steps = WH.orderSteps(o);
     const idx = steps.findIndex((s) => s.key === o.status);
     const done = o.status === 'completed';
     const late = WH.isOverdue(o);

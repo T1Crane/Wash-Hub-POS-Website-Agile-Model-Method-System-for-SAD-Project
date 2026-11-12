@@ -28,7 +28,7 @@
   WH.views.trash = (view) => {
     const isOwner = !!WH.state.user.is_owner;
     let data = null;
-    let archive = [];   // Shop Owner only: list of records deleted forever (copies kept in the backend)
+    let archive = [];
     let tab = 'orders';
 
     view.innerHTML = `

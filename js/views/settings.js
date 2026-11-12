@@ -15,7 +15,7 @@
   WH.views.settings = (view) => {
     const s = WH.state.settings;
     const local = WH.store.mode === 'local';
-    const canEditShop = WH.can('settings_save'); // Owner / Admin only
+    const canEditShop = WH.can('settings_save');
 
     view.innerHTML = `
       <div class="page-grid">
@@ -192,13 +192,13 @@
     if (hist) {
       const result = hist.querySelector('#hist-result');
       const delBtn = hist.querySelector('#hist-delete');
-      let checked = null; // the range that was last checked
+      let checked = null;
       const range = () => ({ from: hist.querySelector('[name="from"]').value, to: hist.querySelector('[name="to"]').value });
       hist.querySelectorAll('input').forEach((i) => i.addEventListener('change', () => { checked = null; delBtn.disabled = true; result.innerHTML = ''; }));
 
       hist.querySelector('#hist-check').onclick = async () => {
         try {
-          checked = await WH.api('history_delete', range()); // without confirm = count only
+          checked = await WH.api('history_delete', range());
           result.innerHTML = checked.count
             ? `<b>${checked.count}</b> finished order${checked.count === 1 ? '' : 's'} from ${WH.fmtDate(checked.from + 'T12:00:00')} to ${WH.fmtDate(checked.to + 'T12:00:00')} · billed ${WH.money(checked.billed)} · paid ${WH.money(checked.paid)}`
             : 'No finished orders in these dates.';

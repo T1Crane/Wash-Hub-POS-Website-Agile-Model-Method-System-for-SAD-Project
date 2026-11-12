@@ -256,7 +256,7 @@
         box.querySelectorAll('[data-nc]').forEach((inp) => inp.addEventListener('input', () => {
           const hadName = !!n.name.trim();
           n[inp.dataset.nc] = inp.value;
-          if (hadName !== !!n.name.trim()) renderTotals();   // the loyalty card appears once there is a name
+          if (hadName !== !!n.name.trim()) renderTotals();
         }));
         $('#cust-search-again').onclick = () => { d.newCustomer = null; d.loyaltyTicks = null; d.loyaltyUse = 0; renderCustomer(); renderTotals(); };
         setTimeout(() => box.querySelector(n.name ? '[data-nc="phone"]' : '[data-nc="name"]').focus(), 0);
@@ -275,7 +275,7 @@
         if (!term) { results.innerHTML = ''; return; }
         try {
           const list = await WH.api('customers', { q: term, limit: 8 });
-          if (q.value.trim() !== term) return; // user kept typing
+          if (q.value.trim() !== term) return;
           results.innerHTML = `<div class="cust-results">
             ${list.map((c, i) => `<button type="button" data-pick="${i}"><span class="avatar" style="width:34px;height:34px;font-size:.8rem">${h(WH.initials(c.name))}</span>
               <span style="flex:1"><b>${h(c.name)}</b><br><span class="small muted">${h(c.phone || 'No phone')} · ${c.order_count} order${c.order_count === 1 ? '' : 's'}</span></span></button>`).join('')}
@@ -344,8 +344,8 @@
       box.querySelectorAll('[data-loy]').forEach((b) => b.addEventListener('click', () => {
         const v = b.dataset.loy;
         d.loyaltyTicks = v === 'auto' ? null : Math.max(0, Math.min(50, L.ticks + Number(v)));
-        if (d.loyaltyTicks === L.auto) d.loyaltyTicks = null;   // same as automatic = automatic
-        d.loyaltyUse = Math.min(d.loyaltyUse, L.used);          // keep the FREE choice, the plan re-checks the limit
+        if (d.loyaltyTicks === L.auto) d.loyaltyTicks = null;
+        d.loyaltyUse = Math.min(d.loyaltyUse, L.used);
         renderTotals();
       }));
       // "save" mode: the cashier chooses how many saved FREE to use on this order
@@ -449,13 +449,13 @@
           payment: { amount: c.applied, method: d.method },
           fulfillment: d.fulfillment,
           notes: d.notes,
-          loyalty_ticks: d.loyaltyTicks,   // null = let the server count them automatically
-          loyalty_use_free: c.loyalty.used, // FREE used on this order ('save' mode)
+          loyalty_ticks: d.loyaltyTicks,
+          loyalty_use_free: c.loyalty.used,
         });
         WH.posDraft = newDraft();
         WH.toast(`Order ${order.code} created`, 'success');
         WH.showTicket(order, { change: c.change, fromPos: true });
-        WH.views.pos(view); // fresh, empty counter behind the ticket
+        WH.views.pos(view);
         WH.updateBadges();
       } catch (e) {
         WH.error(e);

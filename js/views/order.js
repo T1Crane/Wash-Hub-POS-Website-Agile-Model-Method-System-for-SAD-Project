@@ -14,7 +14,7 @@
 
   /** Move an order to the next stage. Returns the updated order (or null if cancelled). */
   WH.advanceOrder = async (order) => {
-    const next = WH.nextStatus(order);   // skips Washing / Drying if this order doesn't need it
+    const next = WH.nextStatus(order);
     if (!next) return null;
     try {
       // A role that can't take payments must leave unpaid orders to someone who can
