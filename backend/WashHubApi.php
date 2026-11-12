@@ -34,7 +34,7 @@ use Throwable;
 
 class WashHubApi
 {
-    /** Shop timezone. Change this if the shop is outside the Philippines. */
+    /** Shop ti mezone. Change this if the shop is outside the Philippines. */
     public const TIMEZONE = 'Asia/Manila';
 
     /** Order workflow, in order. "completed" means Picked Up / Delivered. */
@@ -101,13 +101,14 @@ class WashHubApi
         'trash'            => ['admin'],  // see what was deleted
         'trash_restore'    => ['admin'],  // bring it back
         'trash_purge'      => ['admin'],  // delete forever (Shop Owner only, see OWNER_ONLY)
+        'trash_archive'    => ['admin'],  // read the copies of what was deleted forever (Shop Owner only)
     ];
 
     /**
      * Actions that need the ★ Shop Owner mark on top of the Owner / Admin role.
      * There is exactly one Shop Owner (wh_users.is_owner = 1). Other admins can't use these.
      */
-    public const OWNER_ONLY = ['activity_log', 'owner_transfer', 'trash_purge'];
+    public const OWNER_ONLY = ['activity_log', 'owner_transfer', 'trash_purge', 'trash_archive'];
 
     /**
      * SOFT DELETE: these tables have a deleted_at column.
@@ -264,6 +265,7 @@ class WashHubApi
             case 'trash':            return $this->trash();
             case 'trash_restore':    return $this->restoreFromTrash($in);
             case 'trash_purge':      return $this->purgeFromTrash($in);
+            case 'trash_archive':    return $this->deletedArchive($in);
         }
         throw new InvalidArgumentException("Unknown action \"$action\".");
     }
@@ -430,6 +432,22 @@ class WashHubApi
                 details    VARCHAR(255) NOT NULL DEFAULT '',
                 created_at DATETIME NOT NULL,
                 INDEX idx_activity_time (created_at)
+            ) $opts",
+
+            // Archive of records DELETED FOREVER from the Trash. Before the real DELETE, a full copy of the
+            // record (with its items, payments, history...) is saved here as JSON, with who and when.
+            // No foreign key on purpose: the original rows are gone. The app can only read this table.
+            "CREATE TABLE IF NOT EXISTS wh_deleted_archive (
+                id            INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+                source_table  VARCHAR(40)  NOT NULL,              -- e.g. wh_orders
+                record_id     INT UNSIGNED NOT NULL,              -- its id before it was deleted
+                label         VARCHAR(255) NOT NULL DEFAULT '',   -- e.g. 'order WH-261110-0003'
+                data          LONGTEXT     NOT NULL,              -- full copy as JSON
+                deleted_by_id INT UNSIGNED NULL,
+                deleted_by    VARCHAR(160) NOT NULL DEFAULT '',
+                deleted_at    DATETIME     NOT NULL,
+                INDEX idx_archive_record (source_table, record_id),
+                INDEX idx_archive_time (deleted_at)
             ) $opts",
 
         ];
@@ -2249,6 +2267,10 @@ class WashHubApi
      * Shop Owner only: DELETE FOREVER (the only real DELETE in the system). Payload {type, id} or {type, all: true}.
      * Only rows already in the Trash can be removed. Removing an order also removes its items,
      * payments and status history (ON DELETE CASCADE). Removing a customer removes all their orders.
+     *
+     * ARCHIVE: before the DELETE, a full copy of every removed record (with its items, payments,
+     * history, orders...) is saved in wh_deleted_archive, in the same transaction. So "deleted forever"
+     * is gone from the app, but the backend still keeps what it was, who deleted it and when.
      */
     private function purgeFromTrash(array $in): array
     {
@@ -2269,6 +2291,9 @@ class WashHubApi
             $marks = implode(',', array_fill(0, count($ids), '?'));
             $this->db->beginTransaction();
             try {
+                // 1) copy everything into the archive first (if this fails, nothing is deleted)
+                $this->archiveBeforePurge($type, $table, $ids);
+                // 2) then the real DELETE
                 if ($type === 'customers') {   // orders point to the customer, so they go first
                     $this->db->prepare("DELETE FROM wh_orders WHERE customer_id IN ($marks)")->execute($ids);
                 }
@@ -2278,9 +2303,88 @@ class WashHubApi
                 $this->db->rollBack();
                 throw $e;
             }
-            $this->record('trash_purge', 'Deleted forever: ' . $label);
+            $this->record('trash_purge', 'Deleted forever: ' . $label . ' (a copy is kept in the archive)');
         }
         return $this->trash();
+    }
+
+    /**
+     * Saves a full copy of each record that is about to be deleted forever into wh_deleted_archive.
+     * Runs inside purgeFromTrash()'s transaction. The copy is JSON, e.g. an order with its items,
+     * payments and status history; a customer with all their orders. Passwords are never copied.
+     */
+    private function archiveBeforePurge(string $type, string $table, array $ids): void
+    {
+        $marks = implode(',', array_fill(0, count($ids), '?'));
+        $stmt  = $this->db->prepare("SELECT * FROM $table WHERE id IN ($marks) AND deleted_at IS NOT NULL");
+        $stmt->execute($ids);
+        $insert = $this->db->prepare('INSERT INTO wh_deleted_archive
+                (source_table, record_id, label, data, deleted_by_id, deleted_by, deleted_at) VALUES (?, ?, ?, ?, ?, ?, ?)');
+        $now = $this->dt($this->now());
+        foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+            $insert->execute([
+                $table,
+                $row['id'],
+                mb_substr(self::trashLabel($type, $row), 0, 255),
+                json_encode($this->archiveSnapshot($type, $row), JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT),
+                $this->user['id'] ?? null,
+                mb_substr(trim(($this->user['full_name'] ?? '') . ' (' . ($this->user['username'] ?? '') . ')'), 0, 160),
+                $now,
+            ]);
+        }
+    }
+
+    /** The record plus everything that is deleted together with it (what the archive keeps). */
+    private function archiveSnapshot(string $type, array $row): array
+    {
+        $rows = function (string $sql, array $args): array {
+            $stmt = $this->db->prepare($sql);
+            $stmt->execute($args);
+            return $stmt->fetchAll(PDO::FETCH_ASSOC);
+        };
+        // an order with its lines, payments and status history (all removed by ON DELETE CASCADE)
+        $order = fn (array $o) => $o + [
+            'items'          => $rows('SELECT * FROM wh_order_items WHERE order_id = ? ORDER BY id', [$o['id']]),
+            'payments'       => $rows('SELECT * FROM wh_payments WHERE order_id = ? ORDER BY id', [$o['id']]),
+            'status_history' => $rows('SELECT * FROM wh_order_logs WHERE order_id = ? ORDER BY id', [$o['id']]),
+        ];
+        switch ($type) {
+            case 'orders':
+                return $order($row);
+            case 'customers':
+                return $row + ['orders' => array_map($order, $rows('SELECT * FROM wh_orders WHERE customer_id = ? ORDER BY id', [$row['id']]))];
+            case 'inventory':
+                return $row + ['stock_logs' => $rows('SELECT * FROM wh_inventory_logs WHERE item_id = ? ORDER BY id', [$row['id']])];
+            case 'users':
+                unset($row['password_hash']);   // never keep a password, not even its hash
+                return $row;
+            default:
+                return $row;
+        }
+    }
+
+    /**
+     * Shop Owner only: read the archive of records deleted forever (read-only; the app has no way
+     * to change or delete it). Payload {} = list (newest first), {id} = one record with its full copy.
+     */
+    private function deletedArchive(array $in): array
+    {
+        $id = (int) ($in['id'] ?? 0);
+        if ($id > 0) {
+            $stmt = $this->db->prepare('SELECT * FROM wh_deleted_archive WHERE id = ?');
+            $stmt->execute([$id]);
+            $r = $stmt->fetch(PDO::FETCH_ASSOC);
+            if (!$r) {
+                throw new InvalidArgumentException('Archive record not found.');
+            }
+            return ['id' => (int) $r['id'], 'source_table' => $r['source_table'], 'record_id' => (int) $r['record_id'],
+                    'label' => $r['label'], 'deleted_by' => $r['deleted_by'], 'deleted_at' => $this->iso($r['deleted_at']),
+                    'data' => json_decode($r['data'], true)];
+        }
+        $list = $this->db->query('SELECT id, source_table, record_id, label, deleted_by, deleted_at FROM wh_deleted_archive ORDER BY id DESC LIMIT 300')
+            ->fetchAll(PDO::FETCH_ASSOC);
+        return array_map(fn ($r) => ['id' => (int) $r['id'], 'source_table' => $r['source_table'], 'record_id' => (int) $r['record_id'],
+            'label' => $r['label'], 'deleted_by' => $r['deleted_by'], 'deleted_at' => $this->iso($r['deleted_at'])], $list);
     }
 
     // =====================================================================

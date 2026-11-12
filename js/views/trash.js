@@ -7,6 +7,8 @@
    - Restore        -> sets deleted_at back to NULL (the record is back)
    - Delete forever -> the only real DELETE in the system (★ Shop Owner only)
    Restoring a customer also brings back the orders deleted together with them.
+   - Archive tab    -> (★ Shop Owner only) read-only copies of what was deleted
+                       forever, kept in wh_deleted_archive with who and when
    ========================================================================== */
 (function (WH) {
   'use strict';
@@ -26,25 +28,19 @@
   WH.views.trash = (view) => {
     const isOwner = !!WH.state.user.is_owner;
     let data = null;
+    let archive = [];   // Shop Owner only: list of records deleted forever (copies kept in the backend)
     let tab = 'orders';
 
     view.innerHTML = `
-      <div class="card" style="margin-bottom:14px">
-        <div class="small">
-          <b>${WH.icon('trash')} How the Trash works (soft delete).</b>
-          When something is deleted, it is <b>not removed from the database</b>. It only gets a <i>deleted date</i>
-          (the <code>deleted_at</code> column) and is hidden from every screen and report.
-          <b>Restore</b> clears that date and brings it back exactly as it was.
-          ${isOwner ? '<b>Delete forever</b> really removes it and cannot be undone.' : 'Only the ★ Shop Owner can delete things forever.'}
-        </div>
-      </div>
       <div class="toolbar"><div class="segmented" id="tr-tabs"></div></div>
       <div id="tr-body"><div class="loading">Loading…</div></div>`;
 
     const render = () => {
       view.querySelector('#tr-tabs').innerHTML = Object.entries(TYPES).map(([k, [label]]) =>
-        `<button type="button" data-t="${k}" class="${k === tab ? 'on' : ''}">${label} (${data[k].length})</button>`).join('');
+        `<button type="button" data-t="${k}" class="${k === tab ? 'on' : ''}">${label} (${data[k].length})</button>`).join('')
+        + (isOwner ? `<button type="button" data-t="archive" class="${tab === 'archive' ? 'on' : ''}">🗄 Archive (${archive.length})</button>` : '');
       view.querySelectorAll('#tr-tabs [data-t]').forEach((b) => b.addEventListener('click', () => { tab = b.dataset.t; render(); }));
+      if (tab === 'archive') { renderArchive(); return; }
 
       const rows = data[tab];
       const [label, icon, restoreNote] = TYPES[tab];
@@ -72,6 +68,36 @@
       if (empty) empty.onclick = () => purge(null);
     };
 
+    // Shop Owner only: read-only list of what was deleted forever (from wh_deleted_archive)
+    const SOURCE = { wh_orders: 'Order', wh_customers: 'Customer', wh_services: 'Service', wh_inventory: 'Supply item', wh_inventory_logs: 'Stock record', wh_users: 'User account' };
+    const renderArchive = () => {
+      view.querySelector('#tr-body').innerHTML = `
+        <p class="small muted" style="margin:0 0 10px">These were <b>deleted forever</b> from the Trash. They no longer show anywhere in the app,
+          but a full copy (for an order: its items, payments and status history) is kept in the backend table
+          <code>wh_deleted_archive</code>, with who deleted it and when. This list is read-only: nobody can change or remove it from the app.</p>
+        ${archive.length ? `<div class="table-wrap"><table class="table">
+          <thead><tr><th>Deleted forever</th><th>Type</th><th>Record</th><th>By</th><th class="right"></th></tr></thead>
+          <tbody>${archive.map((r) => `<tr>
+            <td class="small" style="white-space:nowrap">${WH.fmtDateTime(r.deleted_at)}</td>
+            <td class="small">${h(SOURCE[r.source_table] || r.source_table)}</td>
+            <td><b>${h(r.label)}</b><div class="tiny muted">old id #${r.record_id}</div></td>
+            <td class="small">${h(r.deleted_by)}</td>
+            <td class="right"><button class="btn btn-sm" data-view="${r.id}">View copy</button></td></tr>`).join('')}</tbody></table></div>`
+        : `<div class="card empty">🗄<div>Nothing has been deleted forever yet.</div></div>`}`;
+      view.querySelectorAll('[data-view]').forEach((b) => b.addEventListener('click', async () => {
+        try {
+          const r = await WH.api('trash_archive', { id: Number(b.dataset.view) });
+          WH.modal({
+            title: `Archive: ${r.label}`,
+            wide: true,
+            body: `<p class="small muted" style="margin-top:0">Deleted forever on ${WH.fmtDateTime(r.deleted_at)} by ${h(r.deleted_by)} · from <code>${h(r.source_table)}</code>, old id #${r.record_id}</p>
+              <pre style="max-height:60vh;overflow:auto;background:var(--surface-2);border:1px solid var(--line);border-radius:10px;padding:12px;font-size:.78rem;white-space:pre-wrap">${h(JSON.stringify(r.data, null, 2))}</pre>`,
+            foot: '<button class="btn" data-close>Close</button>',
+          });
+        } catch (e) { WH.error(e); }
+      }));
+    };
+
     const restore = async (row) => {
       try {
         data = await WH.api('trash_restore', { type: tab, id: row.id });
@@ -86,19 +112,25 @@
     const purge = async (row) => {
       const what = row ? `<b>${h(row.title)}</b>` : `<b>all ${data[tab].length} ${h(TYPES[tab][0].toLowerCase())}</b> in this tab`;
       const ok = await WH.confirm(row ? `Delete ${row.title} forever?` : 'Empty this Trash tab?',
-        `${what} will be removed from the database for good${tab === 'customers' ? ', together with all their orders and payments' : ''}${tab === 'orders' ? ', with their items and payments' : ''}.
-         <br><br><b style="color:var(--danger)">This cannot be undone.</b>`,
+        `${what} will be removed from the app for good${tab === 'customers' ? ', together with all their orders and payments' : ''}${tab === 'orders' ? ', with their items and payments' : ''}.
+         A read-only copy is kept in the <b>Archive</b> tab.
+         <br><br><b style="color:var(--danger)">It cannot be restored.</b>`,
         'Delete forever');
       if (!ok) return;
       try {
         data = await WH.api('trash_purge', row ? { type: tab, id: row.id } : { type: tab, all: true });
-        WH.toast(row ? `${row.title} was deleted forever` : 'Trash tab emptied', 'success');
+        archive = await WH.api('trash_archive');
+        WH.toast(row ? `${row.title} was deleted forever (copy kept in the Archive)` : 'Trash tab emptied (copies kept in the Archive)', 'success');
         render();
       } catch (e) { WH.error(e); }
     };
 
     const load = async () => {
-      try { data = await WH.api('trash'); render(); } catch (e) { WH.error(e); }
+      try {
+        data = await WH.api('trash');
+        if (isOwner) archive = await WH.api('trash_archive');
+        render();
+      } catch (e) { WH.error(e); }
     };
     load();
     return { refresh: load };
